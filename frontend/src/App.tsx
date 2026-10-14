@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { LandingPage } from './pages/LandingPage'
+import { LoginPage } from './pages/LoginPage'
 import { Dashboard } from './pages/Dashboard'
 import { SchemaPage } from './pages/SchemaPage'
 import { ComparePage } from './pages/ComparePage'
@@ -10,18 +12,24 @@ import { SafetyPage } from './pages/SafetyPage'
 
 export default function App() {
   return (
-    <AppShell>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/schema" element={<SchemaPage />} />
-        <Route path="/compare" element={<ComparePage />} />
-        <Route path="/trace" element={<TracePage />} />
-        <Route path="/trace/:runId" element={<TracePage />} />
-        <Route path="/audit" element={<AuditPage />} />
-        <Route path="/results" element={<ResultsPage />} />
-        <Route path="/safety" element={<SafetyPage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </AppShell>
+    <Routes>
+      {/* Public landing page (dark theme, no app shell). */}
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/login" element={<LoginPage />} />
+
+      {/* Operational console. */}
+      <Route path="/console" element={<AppShell />}>
+        <Route index element={<Dashboard />} />
+        <Route path="schema" element={<SchemaPage />} />
+        <Route path="compare" element={<ComparePage />} />
+        <Route path="trace" element={<TracePage />} />
+        <Route path="trace/:runId" element={<TracePage />} />
+        <Route path="audit" element={<AuditPage />} />
+        <Route path="results" element={<ResultsPage />} />
+        <Route path="safety" element={<SafetyPage />} />
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   )
 }

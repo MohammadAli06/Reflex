@@ -14,7 +14,16 @@
       "Shell(.venvScriptspython.exe:*)",
       "Shell(dir:*)",
       "Shell(mkdir:*)",
-      "Shell(move:*)"
+      "Shell(move:*)",
+      "Shell(if:*)",
+      "Shell(else:*)",
+      "Shell(findstr:*)",
+      "Shell(curl -s -o NUL -w root=%{http_code}\\n http://localhost:5173/)",
+      "Shell(curl -s -o NUL -w console=%{http_code}\\n http://localhost:5173/console)",
+      "Shell(curl -s -o NUL -w landing_module=%{http_code}\\n http://localhost:5173/src/pages/LandingPage.tsx)",
+      "Shell(curl -s -o NUL -w css=%{http_code}\\n http://localhost:5173/src/landing.css)",
+      "Shell(type:*)",
+      "Shell(pnpm:*)"
     ],
     "deny": [],
     "defaultMode": "default"

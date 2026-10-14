@@ -32,11 +32,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = response.statusText
     try {
       const body = await response.json()
-      detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+      const inner = body?.detail
+      if (typeof inner === 'string') {
+        detail = inner
+      } else if (inner && typeof inner === 'object') {
+        detail = typeof inner.message === 'string' ? inner.message : JSON.stringify(inner)
+      } else if (typeof body?.error === 'string') {
+        detail = body.error
+      }
     } catch {
       /* keep statusText */
     }
-    throw new ApiError(response.status, detail)
+    throw new ApiError(response.status, detail || `HTTP ${response.status}`)
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
