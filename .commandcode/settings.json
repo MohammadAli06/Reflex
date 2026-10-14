@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(pdftotext:*)",
+      "Shell(python --version)",
+      "Shell(node --version)",
+      "Shell(npm:*)",
+      "Shell(git:*)",
+      "Shell(python -c \"import pypdf; print('pypdf ok')\" 2>&1; python -c \"import fitz; print('fitz ok')\" 2>&1; python -c \"import PyPDF2; print('PyPDF2 ok')\" 2>&1)",
+      "Shell(py --version 2>&1; py -3 --version 2>&1; where python 2>&1; where py 2>&1; node --version 2>&1; npm --version 2>&1)",
+      "Shell(py -3 -c \"import pypdf; print('pypdf ok')\" 2>&1; py -3 -c \"import fitz; print('fitz ok')\" 2>&1)",
+      "Shell(py:*)",
+      "Shell(py -3 -c \"import fastapi; print('fastapi', fastapi.__version__)\" 2>&1; py -3 -c \"import pydantic; print('pydantic', pydantic.__version__)\" 2>&1; py -3 -c \"import httpx; print('httpx', httpx.__version__)\" 2>&1; py -3 -c \"import pytest; print('pytest', pytest.__version__)\" 2>&1; py -3 -c \"import uvicorn; print('uvicorn ok')\" 2>&1)",
+      "Shell(.venvScriptspython.exe:*)",
+      "Shell(dir:*)",
+      "Shell(mkdir:*)",
+      "Shell(move:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

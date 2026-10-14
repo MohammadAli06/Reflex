@@ -1,0 +1,10 @@
+# Minimum versions that resolve on Python 3.11 through 3.14.
+# Pins are intentionally loose so wheels exist for the running interpreter.
+fastapi>=0.115
+uvicorn[standard]>=0.34
+jsonschema>=4.23
+httpx>=0.28
+pydantic>=2.12
+python-dotenv>=1.0
+pytest>=8.3
+google-genai>=1.0

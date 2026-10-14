@@ -1,0 +1,22 @@
+import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+
+// The browser talks only to the control API; /api is proxied to port 8001.
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8001',
+        changeOrigin: true,
+      },
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    env: { NODE_ENV: 'test' },
+  },
+})
