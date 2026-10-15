@@ -13,7 +13,7 @@ export function LoginPage() {
     event.preventDefault()
     if (!username.trim() || !password) { setError('USERNAME_AND_PASSWORD_REQUIRED'); return }
     if (!authenticate(username, password)) { setError('INVALID_OPERATOR_CREDENTIALS'); return }
-    navigate('/console')
+    navigate('/console', { replace: true })
   }
   return <main className="login-page">
     <div className="login-telemetry login-telemetry-left">NODE: AUTH_GATEWAY_01 // TLS: VERIFIED</div>

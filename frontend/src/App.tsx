@@ -12,6 +12,10 @@ import { AuditPage } from './pages/AuditPage'
 import { ResultsPage } from './pages/ResultsPage'
 import { SafetyPage } from './pages/SafetyPage'
 
+function RequireAuth() {
+  return currentUser() ? <AppShell /> : <Navigate to="/login" replace />
+}
+
 export default function App() {
   return (
     <Routes>
@@ -20,7 +24,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
 
       {/* Operational console. */}
-      <Route path="/console" element={currentUser() ? <AppShell /> : <Navigate to="/login" replace />}>
+      <Route path="/console" element={<RequireAuth />}>
         <Route index element={<Dashboard />} />
         <Route path="schema" element={<SchemaPage />} />
         <Route path="compare" element={<ComparePage />} />
