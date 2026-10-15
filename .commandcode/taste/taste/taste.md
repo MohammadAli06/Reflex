@@ -7,3 +7,4 @@
 - Prefers pnpm for running frontend scripts (e.g. `pnpm build`). Confidence: 0.5
 - When supplying a concrete value (e.g. a literal CSS padding like `60px`), expects it applied verbatim rather than replaced by the agent's own approximation — substituting a different value reads as ignoring the instruction. Confidence: 0.6
 - Favors minimal styling on the dark UI: dislikes decorative light chip/background treatments that clash (e.g. the global light `code` background), preferring plain, unstyled elements that "look fine" as-is. Confidence: 0.5
+- Prefers complex technical topics explained in simple plain words with a complete end-to-end flow, including an ordered walkthrough for demoing/explaining multi-page UI to others and where AI/LLM fits in the architecture. Confidence: 0.6
