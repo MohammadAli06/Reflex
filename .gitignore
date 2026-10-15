@@ -18,6 +18,5 @@ dist/
 .vite/
 
 # generated
-audit/
 results/
 *.log
