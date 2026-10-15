@@ -5,4 +5,5 @@
 - Likes new page styles scoped/namespaced so they don't clobber the existing app's theme (e.g. a separate scoped CSS file with its own token prefix). Confidence: 0.5
 - Optimizes for speed of delivery: wants the change implemented and a build run, then stop — extra verification (dev servers, live route probing, manual browser checks) is seen as too time-consuming. Confidence: 0.75
 - Prefers pnpm for running frontend scripts (e.g. `pnpm build`). Confidence: 0.5
+- When supplying a concrete value (e.g. a literal CSS padding like `60px`), expects it applied verbatim rather than replaced by the agent's own approximation — substituting a different value reads as ignoring the instruction. Confidence: 0.6
 - Favors minimal styling on the dark UI: dislikes decorative light chip/background treatments that clash (e.g. the global light `code` background), preferring plain, unstyled elements that "look fine" as-is. Confidence: 0.5

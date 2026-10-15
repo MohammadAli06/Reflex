@@ -209,7 +209,7 @@ export function LandingPage() {
               when a safe repair can&rsquo;t be justified.
             </p>
             <div className="lp-cta-row">
-              <Link className="lp-btn lp-btn-solid" to="/console">
+              <Link className="lp-btn lp-btn-solid" to="/login">
                 Open console
               </Link>
               <a className="lp-btn lp-btn-ghost" href="#how-it-works">
@@ -539,7 +539,7 @@ export function LandingPage() {
               <ClosingSeam />
             </div>
             <div className="lp-closing-actions">
-              <Link className="lp-btn lp-btn-solid" style={{ height: '2.75rem', padding: '0 2rem' }} to="/console">
+              <Link className="lp-btn lp-btn-solid" style={{ height: '2.75rem', padding: '0 2rem' }} to="/login">
                 Open console
               </Link>
               <a className="lp-btn lp-btn-outline" href="#evidence">

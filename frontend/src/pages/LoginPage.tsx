@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { authenticate, DEMO_PASSWORD, DEMO_USERNAME } from '../auth'
 import '../login.css'
 
 export function LoginPage() {
@@ -11,6 +12,7 @@ export function LoginPage() {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!username.trim() || !password) { setError('USERNAME_AND_PASSWORD_REQUIRED'); return }
+    if (!authenticate(username, password)) { setError('INVALID_OPERATOR_CREDENTIALS'); return }
     navigate('/console')
   }
   return <main className="login-page">
@@ -25,6 +27,7 @@ export function LoginPage() {
         {error && <p className="login-error" role="alert">// {error}</p>}
         <button className="login-submit" type="submit">Authenticate <span aria-hidden="true">→</span></button>
       </form>
+      <div className="login-demo-credentials">DEMO ACCESS // USERNAME: <b>{DEMO_USERNAME}</b> // PASSWORD: <b>{DEMO_PASSWORD}</b></div>
       <div className="login-foot"><span>ACCESS_LEVEL: OPERATOR</span><span>SESSION: ENCRYPTED</span></div>
     </section>
     <aside className="login-art" aria-hidden="true"><div className="login-art-copy"><span>// IDENTITY VERIFICATION</span><strong>Authentication is<br />a safety boundary.</strong><p>Every action in the repair loop is attributable, reviewable, and retained in the audit log.</p></div><div className="login-seam"><span className="login-line" /><span className="login-break">×</span><span className="login-stitches"><i /><i /><i /><i /><i /></span><span className="login-line login-line-healed" /></div><div className="login-art-meta"><span>UNVERIFIED</span><span>IDENTITY_ASSERTED</span></div></aside>

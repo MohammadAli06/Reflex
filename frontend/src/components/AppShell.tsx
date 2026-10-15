@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
+import { currentUser } from '../auth'
 import { api } from '../api/client'
 import { useApi } from '../hooks/useApi'
 import { shortHash } from '../utils/format'
@@ -27,6 +28,7 @@ function StatusItem({ ok, label, state }: { ok: boolean; label: string; state: s
 
 export function AppShell({ children }: { children?: ReactNode }) {
   const { data } = useApi(() => api.status(), [])
+  const userInitial = (currentUser()?.[0] ?? 'O').toUpperCase()
 
   return (
     <div className="console">
@@ -44,9 +46,9 @@ export function AppShell({ children }: { children?: ReactNode }) {
           <span className="con-sep" />
           <StatusItem ok={Boolean(data?.llm_configured)} label="LLM" state={data?.llm_configured ? 'configured' : 'unconfigured'} />
           <span className="con-idle">{data?.busy ? 'RUNNING · BUSY' : 'IDLE · READY'}</span>
-          <span className="con-avatar">
-            <span className="msym msym-18">person</span>
-          </span>
+          <Link className="con-avatar" to="/console/profile" aria-label="Open profile">
+            {userInitial}
+          </Link>
         </div>
       </header>
 
