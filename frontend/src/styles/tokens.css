@@ -1,0 +1,194 @@
+/* ---------------------------------------------------------------------------
+   Reflex design tokens — "calm, precise, engineered".
+   Warm off-white canvas, hairline borders, serif display + sans UI + mono
+   payloads. Light is default; dark via [data-theme="dark"] on <html>.
+   WCAG AA contrast in both themes.
+   --------------------------------------------------------------------------- */
+
+:root {
+  /* Brand & semantics — light theme */
+  --brand: #a02e26;
+  --brand-strong: #7e231d;
+  --brand-soft: rgba(160, 46, 38, 0.07);
+  --brand-border: rgba(160, 46, 38, 0.28);
+  --brand-text: #a02e26;
+
+  --success: #1b8a6b;
+  --success-strong: #146b52;
+  --success-soft: rgba(27, 138, 107, 0.09);
+  --success-border: rgba(27, 138, 107, 0.32);
+
+  --navy: #1f3a5f;
+  --navy-strong: #16294a;
+  --navy-soft: rgba(31, 58, 95, 0.07);
+  --navy-border: rgba(31, 58, 95, 0.3);
+
+  --warning: #b7791f;
+  --warning-strong: #8a5b15;
+  --warning-soft: rgba(183, 121, 31, 0.1);
+  --warning-border: rgba(183, 121, 31, 0.34);
+
+  /* Surfaces & text — light */
+  --canvas: #f7f5f2;
+  --surface: #ffffff;
+  --surface-2: #fdfcfa;
+  --surface-3: #f1ede7;
+  --ink: #16181d;
+  --ink-2: #3e434b;
+  --muted: #5e646e;
+  --faint: #8b9096;
+  --hairline: #e6e2dc;
+  --hairline-2: #d9d3c8;
+  --focus: #1f3a5f;
+
+  /* Type */
+  --font-sans: 'Geist', 'Inter Tight', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: 'Newsreader', 'Instrument Serif', Georgia, serif;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 17px;
+  --text-xl: 21px;
+  --text-2xl: 28px;
+  --text-hero: 38px;
+
+  /* Shape */
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Spacing scale (4/8) */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+  --s12: 48px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur-1: 150ms;
+  --dur-2: 220ms;
+
+  /* Layout */
+  --content-max: 1200px;
+  --gutter: 32px;
+
+  /* Backward-compatibility aliases for any lingering legacy classes */
+  --bg-page: var(--canvas);
+  --bg-surface: var(--surface);
+  --bg-surface-tint: var(--navy-soft);
+  --bg-subtle: var(--surface-3);
+  --bg-card: var(--surface);
+  --bg-hover: var(--surface-3);
+  --bg-active: var(--hairline);
+  --surface-tint: var(--navy-soft);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-2);
+  --text-inverse: #ffffff;
+  --border-color: var(--hairline);
+  --border-subtle: var(--hairline);
+  --border-focus: var(--focus);
+  --brand-red: var(--brand);
+  --brand-red-subtle: var(--brand-soft);
+  --brand-red-border: var(--brand-border);
+  --accent-orange: var(--warning);
+  --accent-orange-subtle: var(--warning-soft);
+  --accent-orange-border: var(--warning-border);
+  --reflex-cyan: var(--success);
+  --reflex-cyan-dark: var(--success-strong);
+  --reflex-cyan-subtle: var(--success-soft);
+  --reflex-cyan-border: var(--success-border);
+  --success-green: var(--success);
+  --success-green-subtle: var(--success-soft);
+  --success-green-border: var(--success-border);
+  --component-navy: var(--navy);
+  --component-navy-subtle: var(--navy-soft);
+  --neutral-grey: var(--faint);
+  --neutral-grey-subtle: var(--surface-3);
+  --neutral-grey-border: var(--hairline-2);
+  --bg: var(--canvas);
+  --card: var(--surface);
+  --border: var(--hairline);
+  --text: var(--ink);
+  --muted: var(--muted);
+  --success: var(--success-strong);
+  --success-bg: var(--success-soft);
+  --failure: var(--brand-text);
+  --failure-bg: var(--brand-soft);
+  --warning: var(--warning-strong);
+  --warning-bg: var(--warning-soft);
+  --refusal: var(--warning-strong);
+  --refusal-bg: var(--warning-soft);
+  --neutral: var(--muted);
+  --neutral-bg: var(--surface-3);
+  --primary: var(--brand);
+  --space-1: var(--s1);
+  --space-2: var(--s2);
+  --space-3: var(--s3);
+  --space-4: var(--s4);
+  --space-5: var(--s5);
+  --space-6: var(--s6);
+  --space-8: var(--s8);
+  --space-10: var(--s10);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --transition-fast: var(--dur-1) var(--ease);
+  --transition-normal: var(--dur-2) var(--ease);
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 2px rgba(22, 24, 29, 0.05);
+  --shadow-md: 0 2px 8px rgba(22, 24, 29, 0.06);
+  --shadow-lg: 0 8px 24px rgba(22, 24, 29, 0.08);
+}
+
+[data-theme='dark'] {
+  --brand: #c45044;
+  --brand-strong: #d4695c;
+  --brand-soft: rgba(196, 80, 68, 0.14);
+  --brand-border: rgba(196, 80, 68, 0.42);
+  --brand-text: #e08073;
+
+  --success: #35a986;
+  --success-strong: #4cc39a;
+  --success-soft: rgba(76, 195, 154, 0.13);
+  --success-border: rgba(76, 195, 154, 0.4);
+
+  --navy: #8fb0dd;
+  --navy-strong: #aec6e8;
+  --navy-soft: rgba(143, 176, 221, 0.12);
+  --navy-border: rgba(143, 176, 221, 0.38);
+
+  --warning: #d9a441;
+  --warning-strong: #e2b45e;
+  --warning-soft: rgba(217, 164, 65, 0.14);
+  --warning-border: rgba(217, 164, 65, 0.42);
+
+  --canvas: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1b202a;
+  --surface-3: #222836;
+  --ink: #ede9e3;
+  --ink-2: #c3beb6;
+  --muted: #a8a29a;
+  --faint: #7d7873;
+  --hairline: #262c38;
+  --hairline-2: #333b4b;
+  --focus: #8fb0dd;
+
+  --text-inverse: #0f1115;
+  --bg-surface-tint: var(--navy-soft);
+  --surface-tint: var(--navy-soft);
+  --neutral-grey: var(--faint);
+  --success: var(--success-strong);
+  --failure: var(--brand-text);
+  --warning: var(--warning-strong);
+  --refusal: var(--warning-strong);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+}

@@ -3,12 +3,14 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useApi } from '../hooks/useApi'
 import { useRunEvents } from '../hooks/useRunEvents'
-import { Chip, PageHead, Panel } from '../components/console'
+import { PageHead, Panel } from '../components/console'
 import { EventTimeline } from '../components/EventTimeline'
-import { EmptyState } from '../components/StateViews'
+import { EmptyState, LoadingState } from '../components/StateViews'
+import { CopyButton } from '../components/ui/CopyButton'
+import {
+  IconPlay,
+} from '../components/ui/Icons'
 import { DASH, num, relTime } from '../utils/format'
-
-type Filter = 'all' | 'baseline' | 'healing'
 
 function runTone(status: string): 'ok' | 'bad' | 'warn' | 'mute' {
   if (status === 'finished') return 'ok'
@@ -21,78 +23,100 @@ export function TracePage() {
   const { runId } = useParams<{ runId: string }>()
   const runs = useApi(() => api.listRuns(), [])
   const [selected, setSelected] = useState<string | undefined>(runId)
-  const [filter, setFilter] = useState<Filter>('all')
-  const active = runId ?? selected
+  const active = runId ?? selected ?? runs.data?.runs[0]?.run_id
   const { events, status } = useRunEvents(active)
+
+  if (runs.loading) return <LoadingState label="Loading recorded traces…" />
 
   const activeRun = runs.data?.runs.find((r) => r.run_id === active) ?? null
   const healingRecord = activeRun?.records.find((r) => r.agent === 'healing') ?? null
-  const duration = healingRecord && healingRecord.t_break !== null && healingRecord.t_recovery !== null
-    ? `${Math.round((healingRecord.t_recovery - healingRecord.t_break) * 1000)}ms`
-    : DASH
+
+  const duration =
+    healingRecord && healingRecord.t_break !== null && healingRecord.t_recovery !== null
+      ? `${Math.round((healingRecord.t_recovery - healingRecord.t_break) * 1000)}ms`
+      : DASH
 
   return (
     <div className="con-page">
       <PageHead
-        eyebrow={
-          <>
-            <span>System telemetry</span>
-            <span className="con-muted">//</span>
-            <span>forensic audit</span>
-            <span className="con-muted">·</span>
-            <span className="con-accent">run_id: {active ?? DASH}</span>
-          </>
-        }
+        eyebrow={<span>Every step of a run, in order</span>}
         title="Trace"
+        subtitle="Calls, schema diffs, patches, and validation checks for the selected run."
         right={
-          <>
-            <div className="csegment" style={{ gridAutoFlow: 'row' }}>
-              {(['all', 'baseline', 'healing'] as Filter[]).map((f) => (
-                <button key={f} className={filter === f ? 'on' : ''} onClick={() => setFilter(f)}>
-                  {f}
-                </button>
-              ))}
-            </div>
-            <Link className="cbtn" to="/console/compare">
-              Back to comparison <span className="msym msym-13">arrow_forward</span>
+          <div className="con-row" style={{ gap: 12 }}>
+            <Link className="cbtn cbtn-primary" to="/console/compare">
+              <span>Run new comparison</span>
+              <IconPlay size={13} />
             </Link>
-          </>
+          </div>
         }
       />
 
-      <div style={{ display: 'grid', gridTemplateColumns: '3fr 9fr', gap: '1.25rem', alignItems: 'start' }}>
-        <Panel title="Recorded runs" actions={<Chip tone="mute">{runs.data?.runs.length ?? 0} runs</Chip>}>
+      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24, alignItems: 'start' }}>
+        <Panel
+          title="Runs"
+          actions={
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              {runs.data?.runs.length ?? 0} runs
+            </span>
+          }
+        >
           {runs.data && runs.data.runs.length === 0 ? (
-            <EmptyState message="No runs recorded." hint="Start a comparison to populate the ledger." />
+            <EmptyState
+              message="No runs recorded."
+              hint="Execute a benchmark run from Agent Comparison to populate this ledger."
+            />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {runs.data?.runs.map((run) => {
                 const healing = run.records.find((r) => r.agent === 'healing')
                 const on = run.run_id === active
+                const isRecovered = healing?.outcome === 'recovered'
+                const isRefused = healing?.outcome === 'refused'
+
                 return (
                   <button
                     key={run.run_id}
+                    type="button"
                     onClick={() => setSelected(run.run_id)}
                     style={{
                       textAlign: 'left',
-                      padding: '0.75rem',
+                      padding: '12px 14px',
                       cursor: 'pointer',
-                      borderLeft: `2px solid ${on ? 'var(--c-primary)' : 'transparent'}`,
-                      borderBottom: '1px solid var(--c-outline-variant)',
-                      background: on ? 'var(--c-container)' : 'transparent',
+                      borderRadius: 'var(--radius-md)',
+                      border: `1px solid ${on ? 'var(--reflex-cyan)' : 'var(--border-subtle)'}`,
+                      background: on ? 'var(--surface-tint)' : 'var(--bg-card)',
                       color: 'inherit',
-                      font: 'inherit',
+                      transition: 'all var(--transition-fast)',
                     }}
                   >
-                    <div className="con-row" style={{ justifyContent: 'space-between' }}>
-                      <span className="con-mono" style={{ fontSize: 11, letterSpacing: '0.06em' }}>{run.run_id}</span>
-                      <Chip tone={healing ? (healing.outcome === 'recovered' ? 'ok' : 'bad') : runTone(run.status)}>
-                        {healing?.outcome ?? run.status}
-                      </Chip>
+                    <div style={{ fontSize: 12 }}>
+                      <div className="con-row" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span className="font-mono" style={{ fontWeight: 600 }}>
+                          {run.run_id.slice(0, 10)}…
+                        </span>
+                        <span
+                          className={`badge badge-${
+                            healing
+                              ? isRecovered
+                                ? 'success'
+                                : isRefused
+                                ? 'warning'
+                                : 'failure'
+                              : runTone(run.status) === 'ok' ? 'success' : runTone(run.status) === 'bad' ? 'failure' : runTone(run.status) === 'warn' ? 'warning' : 'neutral'
+                          }`}
+                          style={{ fontSize: 11 }}
+                        >
+                          {healing?.outcome ?? run.status}
+                        </span>
+                      </div>
+
+                    <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12, color: 'var(--text-muted)' }}>
+                      <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>
+                        {run.case_ids.join(', ')}
+                      </span>
+                      <span>{relTime(run.started_at)}</span>
                     </div>
-                    <div className="con-row" style={{ justifyContent: 'space-between', marginTop: 4 }}>
-                      <span className="con-label" style={{ textTransform: 'none', letterSpacing: 0 }}>{run.case_ids.join(', ')}</span>
-                      <span className="con-label">{relTime(run.started_at)}</span>
                     </div>
                   </button>
                 )
@@ -101,37 +125,84 @@ export function TracePage() {
           )}
         </Panel>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <Panel
-            title={activeRun ? `Run ${activeRun.run_id}` : 'No run selected'}
-            actions={
-              activeRun ? (
-                <>
-                  <Chip tone="mute">case: {activeRun.case_ids.join(', ')}</Chip>
-                  <Chip tone="mute">duration: {duration}</Chip>
-                  <Chip tone="mute">tokens: {num(healingRecord?.tokens_total ?? null)}</Chip>
-                  <Chip tone={healingRecord?.outcome === 'recovered' ? 'ok' : 'bad'}>
-                    status: {healingRecord?.outcome ?? activeRun.status}
-                  </Chip>
-                </>
-              ) : null
-            }
-          >
-            {active ? (
-              <EventTimeline events={events} filter={filter} />
-            ) : (
-              <EmptyState message="No run selected." hint="Pick a run from the list or start a comparison." />
-            )}
-          </Panel>
+        {/* Right: Selected Run Details & Event Timeline */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {activeRun ? (
+            <>
+              <div className="card" style={{ padding: 20 }}>
+                <div className="con-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                  <div>
+                    <div className="text-label" style={{ marginBottom: 4 }}>Run</div>
+                    <div className="con-row" style={{ gap: 8 }}>
+                      <h2 className="text-h2 serif" style={{ fontSize: 20, fontWeight: 500 }}>
+                        {activeRun.run_id.slice(0, 18)}…
+                      </h2>
+                      <CopyButton text={activeRun.run_id} truncateLength={0} />
+                    </div>
+                  </div>
 
-          <div className="panel-foot" style={{ border: '1px solid var(--c-outline-variant)', background: 'var(--c-low)', padding: '0.75rem 1rem' }}>
-            <span className="con-row" style={{ gap: '0.5rem' }}>
-              <span className="con-label">Refusal notation</span>
-              <span style={{ textTransform: 'none', letterSpacing: 0 }}>
-                When a violation cannot be resolved from available evidence, the timeline terminates with a refusal event.
-              </span>
+                  <div className="con-row" style={{ flexWrap: 'wrap', gap: 8, fontSize: 12 }}>
+                    <span className="text-muted">
+                      Case <b style={{ color: 'var(--ink)' }}>{activeRun.case_ids.join(', ')}</b>
+                    </span>
+                    <span className="text-muted">
+                      Recovery <b className="font-mono" style={{ color: 'var(--ink)' }}>{duration}</b>
+                    </span>
+                    <span className="text-muted">
+                      Tokens <b className="font-mono" style={{ color: 'var(--ink)' }}>{num(healingRecord?.tokens_total ?? null)}</b>
+                    </span>
+                    <span
+                      className={`badge badge-${
+                        healingRecord?.outcome === 'recovered'
+                          ? 'success'
+                          : healingRecord?.outcome === 'refused'
+                          ? 'warning'
+                          : 'failure'
+                      }`}
+                    >
+                      {healingRecord?.outcome ?? activeRun.status}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <Panel
+                title="Timeline"
+                actions={
+                  <span className="text-muted" style={{ fontSize: 12 }}>
+                    Stream: {status}
+                  </span>
+                }
+              >
+                <EventTimeline events={events} />
+              </Panel>
+            </>
+          ) : (
+            <EmptyState
+              message="No run selected."
+              hint="Pick a run from the list on the left or run a benchmark comparison."
+            />
+          )}
+
+          <div
+            className="text-muted"
+            style={{
+              padding: '14px 18px',
+              borderRadius: 'var(--radius)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--hairline)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: 13,
+            }}
+          >
+            <span>
+              When a change can&apos;t be verified, Reflex stops and records the refusal here.
             </span>
-            <span className="con-label con-warn">stream: {status}</span>
+            <span className="font-mono" style={{ fontSize: 11 }}>
+              {status}
+            </span>
           </div>
         </div>
       </div>

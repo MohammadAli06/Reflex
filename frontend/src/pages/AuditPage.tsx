@@ -1,176 +1,355 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useApi } from '../hooks/useApi'
-import { Chip, PageHead, Panel } from '../components/console'
+import { PageHead, Panel } from '../components/console'
 import { JsonViewer } from '../components/JsonViewer'
-import { ErrorState, LoadingState } from '../components/StateViews'
-import { DASH, num } from '../utils/format'
+import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import { CopyButton } from '../components/ui/CopyButton'
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconSearch,
+  IconX,
+} from '../components/ui/Icons'
+import { DASH } from '../utils/format'
 import type { AuditEntry } from '../types'
 
 const FILTERS = ['all', 'applied', 'refused', 'rolled_back', 'needs_human_review', 'not_drift']
 
-function outcomeTone(outcome: string): 'ok' | 'bad' | 'warn' | 'mute' {
-  if (outcome === 'applied') return 'ok'
-  if (outcome === 'rolled_back' || outcome === 'needs_human_review') return 'warn'
-  if (outcome === 'refused') return 'warn'
-  return 'mute'
+function getStatusBadge(outcome: string) {
+  if (outcome === 'applied') {
+    return (
+      <span className="badge badge-success">
+        Patched
+      </span>
+    )
+  }
+  if (outcome === 'refused') {
+    return (
+      <span className="badge badge-warning">
+        Refused
+      </span>
+    )
+  }
+  return (
+    <span className="badge badge-neutral">
+      No action
+    </span>
+  )
 }
 
-function Confidence({ value }: { value: number }) {
-  const width = Math.round(Math.max(0, Math.min(1, value)) * 100)
+function ConfidenceBar({ value }: { value: number }) {
+  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100)
   return (
-    <span className="con-row" style={{ gap: '0.5rem' }}>
-      <span className="con-mono" style={{ width: 32 }}>{value.toFixed(2)}</span>
-      <span className={`con-bar ${value < 0.5 ? 'con-bar-warn' : ''}`}>
-        <span style={{ width: `${width}%` }} />
+    <div className="con-row" style={{ gap: 8, minWidth: 90 }}>
+      <span className="font-mono text-muted" style={{ fontSize: 11, width: 28 }}>
+        {value.toFixed(2)}
       </span>
-    </span>
+      <div
+        style={{
+          flex: 1,
+          height: 6,
+          background: 'var(--border-color)',
+          borderRadius: 3,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: '100%',
+            width: `${pct}%`,
+            background: value >= 0.8 ? 'var(--success-green)' : value >= 0.5 ? 'var(--reflex-cyan)' : 'var(--accent-orange)',
+            borderRadius: 3,
+          }}
+        />
+      </div>
+    </div>
   )
 }
 
 export function AuditPage() {
   const [filter, setFilter] = useState('all')
+  const [search, setSearch] = useState('')
   const [open, setOpen] = useState<string | null>(null)
   const audit = useApi(() => api.audit({ limit: 200 }), [])
 
-  if (audit.loading) return <LoadingState label="Loading audit ledger…" />
+  if (audit.loading) return <LoadingState label="Loading audit log…" />
   if (audit.error) return <ErrorState message={audit.error} onRetry={audit.reload} />
 
   const entries: AuditEntry[] = audit.data?.entries ?? []
+
+  // Count by outcome
   const counts = FILTERS.reduce<Record<string, number>>((acc, f) => {
     acc[f] = f === 'all' ? entries.length : entries.filter((e) => e.outcome === f).length
     return acc
   }, {})
-  const shown = filter === 'all' ? entries : entries.filter((e) => e.outcome === filter)
-  const selected = shown.find((e) => e.ts === open) ?? null
+
+  // Filter and search
+  const filtered = entries.filter((e) => {
+    if (filter !== 'all' && e.outcome !== filter) return false
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      const matchTool = e.tool.toLowerCase().includes(q)
+      const matchRun = e.run_id.toLowerCase().includes(q)
+      const matchHash = (e.schema_sha256 || '').toLowerCase().includes(q)
+      const matchOutcome = e.outcome.toLowerCase().includes(q)
+      const matchReason = (e.reason_code || '').toLowerCase().includes(q)
+      if (!matchTool && !matchRun && !matchHash && !matchOutcome && !matchReason) return false
+    }
+    return true
+  })
 
   return (
     <div className="con-page">
       <PageHead
-        eyebrow={
-          <>
-            <span className="con-dot con-dot-ok" style={{ borderRadius: 0 }} />
-            Telemetry ledger // registry core
-          </>
-        }
+        eyebrow={<span>Append-only record of every decision</span>}
         title="Audit log"
-        subtitle="Append-only record of every patch and refusal. Entries are hash-linked."
+        subtitle="Every patch, refusal, and classification, with the evidence behind it."
         right={
-          <span className="con-row" style={{ gap: '0.5rem', border: '1px solid var(--c-outline-variant)', padding: '0.375rem 0.625rem' }}>
-            <span className="msym msym-13 con-accent">lock</span>
-            <span className="con-mono" style={{ fontSize: 11 }}>Chain status:</span>
-            <span className="con-mono con-accent" style={{ fontSize: 11 }}>{entries.length} entries</span>
+          <span className="text-muted" style={{ fontSize: 12 }}>
+            {entries.length} entries
           </span>
         }
       />
 
       <Panel
-        title="Ledger stream // immutable journal"
-        actions={<span className="con-label">sync_state: verified</span>}
-        footer={<><span>Showing {shown.length} of {entries.length} entries</span><span className="con-label">Append-only · secrets redacted</span></>}
+        title="Entries"
+        actions={
+          <span className="text-muted" style={{ fontSize: 12 }}>
+            Showing {filtered.length} of {entries.length}
+          </span>
+        }
       >
-        <div className="con-row" style={{ gap: 2, marginBottom: '1rem' }}>
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              className="cbtn cbtn-sm"
+        {/* Controls: Search box and filter buttons */}
+        <div
+          className="con-row"
+          style={{
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
+          {/* Search Box */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: 'var(--bg-subtle)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              padding: '6px 12px',
+              minWidth: 260,
+            }}
+          >
+            <IconSearch size={15} style={{ color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              placeholder="Search by tool, run ID, hash, or reason…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               style={{
-                borderLeft: `2px solid ${filter === f ? 'var(--c-primary)' : 'transparent'}`,
-                borderColor: filter === f ? 'var(--c-outline)' : 'var(--c-outline-variant)',
-                background: filter === f ? 'var(--c-container)' : 'transparent',
-                color: filter === f ? 'var(--c-on)' : 'var(--c-on-variant)',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: 13,
+                outline: 'none',
+                width: '100%',
               }}
-              onClick={() => { setFilter(f); setOpen(null) }}
-            >
-              {f} <span className="con-muted">{counts[f] ?? 0}</span>
-            </button>
-          ))}
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}
+                title="Clear search"
+              >
+                <IconX size={14} />
+              </button>
+            )}
+          </div>
+
+          {/* Filter Pills */}
+          <div className="con-row" style={{ flexWrap: 'wrap', gap: 6 }}>
+            {FILTERS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                className={`cbtn cbtn-sm ${filter === f ? 'cbtn-primary' : 'cbtn-ghost'}`}
+                style={{ textTransform: 'capitalize' }}
+                onClick={() => {
+                  setFilter(f)
+                  setOpen(null)
+                }}
+              >
+                {f === 'applied' ? 'Patched' : f === 'not_drift' ? 'No Action' : f}{' '}
+                <span className="font-mono text-muted" style={{ marginLeft: 4 }}>
+                  ({counts[f] ?? 0})
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        {shown.length === 0 ? (
-          <div className="state state-empty">
-            <strong>No audit entries{filter !== 'all' ? ` for “${filter}”` : ''}.</strong>
-            <span>Run a comparison or a safety scenario to populate the ledger.</span>
-          </div>
+        {filtered.length === 0 ? (
+          <EmptyState
+            message={search ? 'No matching entries.' : 'No audit entries yet.'}
+            hint={search ? 'Try a different search term.' : 'Run a comparison or a safety scenario to create entries.'}
+          />
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <div className="table-wrap">
             <table className="ctable">
               <thead>
                 <tr>
+                  <th style={{ width: 32 }} />
                   <th>Timestamp</th>
                   <th>Tool</th>
-                  <th>Outcome</th>
-                  <th>Version</th>
-                  <th>Hash</th>
+                  <th>Status</th>
+                  <th>Version Change</th>
+                  <th>Schema Hash</th>
                   <th>Confidence</th>
-                  <th>Reason code</th>
-                  <th />
+                  <th>Reason Code</th>
+                  <th style={{ textAlign: 'right' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {shown.map((e) => (
-                  <tr key={e.ts}>
-                    <td className="con-muted">{new Date(e.ts).toLocaleString()}</td>
-                    <td>{e.tool || DASH}</td>
-                    <td><Chip tone={outcomeTone(e.outcome)}>{e.outcome}</Chip></td>
-                    <td>
-                      v{e.schema_version_before ?? '?'} <span className="con-muted">→</span>{' '}
-                      <span className="con-accent">v{e.schema_version_after ?? '?'}</span>
-                    </td>
-                    <td className="con-accent">{(e.schema_sha256 || '').slice(0, 10) || DASH}</td>
-                    <td><Confidence value={e.confidence} /></td>
-                    <td>{e.reason_code ? <Chip tone="mute">{e.reason_code}</Chip> : DASH}</td>
-                    <td>
-                      <button className="cbtn cbtn-sm" onClick={() => setOpen(open === e.ts ? null : e.ts)}>
-                        {open === e.ts ? 'hide' : 'inspect'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {filtered.map((e) => {
+                  const isOpen = open === e.ts
+                  return (
+                    <>
+                      <tr
+                        key={e.ts}
+                        onClick={() => setOpen(isOpen ? null : e.ts)}
+                        style={{
+                          cursor: 'pointer',
+                          background: isOpen ? 'var(--surface-tint)' : undefined,
+                        }}
+                      >
+                        <td style={{ color: 'var(--text-muted)', textAlign: 'center' }}>
+                          {isOpen ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                        </td>
+                        <td className="text-muted font-mono" style={{ fontSize: 12 }}>
+                          {new Date(e.ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}{' '}
+                          {new Date(e.ts).toLocaleTimeString(undefined, { hour12: false })}
+                        </td>
+                        <td>
+                          <b>{e.tool || DASH}</b>
+                        </td>
+                        <td>{getStatusBadge(e.outcome)}</td>
+                        <td className="font-mono" style={{ fontSize: 12 }}>
+                          v{e.schema_version_before ?? '?'} → <span className="con-accent font-mono" style={{ fontWeight: 600 }}>v{e.schema_version_after ?? '?'}</span>
+                        </td>
+                        <td>
+                          <CopyButton text={e.schema_sha256} truncateLength={8} />
+                        </td>
+                        <td>
+                          <ConfidenceBar value={e.confidence} />
+                        </td>
+                        <td>
+                          {e.reason_code ? (
+                            <span className="font-mono con-warn" style={{ fontSize: 12 }}>
+                              {e.reason_code}
+                            </span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right' }}>
+                          <button
+                            type="button"
+                            className="cbtn cbtn-sm"
+                            onClick={(evt) => {
+                              evt.stopPropagation()
+                              setOpen(isOpen ? null : e.ts)
+                            }}
+                          >
+                            {isOpen ? 'Close' : 'Details'}
+                          </button>
+                        </td>
+                      </tr>
+
+                      {/* Expandable row for details */}
+                      {isOpen && (
+                        <tr key={`${e.ts}-details`}>
+                          <td colSpan={9} style={{ padding: '16px 20px', background: 'var(--bg-subtle)' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                              <div className="con-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                                <div className="con-row" style={{ gap: 8 }}>
+                                  <span className="text-label">Inspection:</span>
+                                  <span style={{ fontWeight: 600 }}>{e.tool}</span>
+                                  <span className="text-muted font-mono" style={{ fontSize: 12 }}>
+                                    (Run: {e.run_id})
+                                  </span>
+                                </div>
+                                <div className="con-row" style={{ gap: 8 }}>
+                                  <span className="text-muted">Full sha-256:</span>
+                                  <CopyButton text={e.schema_sha256} truncateLength={16} />
+                                </div>
+                              </div>
+
+                              {/* Before and After JSON */}
+                              <div className="con-grid-2">
+                                <div>
+                                  <div className="text-label" style={{ marginBottom: 6 }}>
+                                    Schema before
+                                  </div>
+                                  {e.old_definition ? (
+                                    <JsonViewer value={e.old_definition} />
+                                  ) : (
+                                    <div className="state state-empty" style={{ padding: 16 }}>
+                                      No original definition recorded.
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div>
+                                  <div className="text-label" style={{ marginBottom: 6 }}>
+                                    Schema after
+                                  </div>
+                                  {e.new_definition ? (
+                                    <JsonViewer value={e.new_definition} />
+                                  ) : (
+                                    <div className="state state-empty" style={{ padding: 16 }}>
+                                      No patch applied (Safe refusal or non-drift).
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Evidence Items */}
+                              {(e.evidence?.length ?? 0) > 0 && (
+                                <div
+                                  style={{
+                                    background: 'var(--bg-card)',
+                                    padding: '12px 16px',
+                                    borderRadius: 'var(--radius-md)',
+                                    border: '1px solid var(--border-color)',
+                                  }}
+                                >
+                                  <div className="text-label" style={{ marginBottom: 6 }}>
+                                    Evidence ({e.evidence.length} items)
+                                  </div>
+                                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: 'var(--text-secondary)' }}>
+                                    {e.evidence.map((item, idx) => (
+                                      <li key={idx} style={{ marginTop: 2 }}>{item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         )}
       </Panel>
-
-      {selected && (
-        <Panel
-          title={`Inspector · ${selected.tool || 'entry'} · ${selected.outcome}`}
-          actions={<Chip tone={outcomeTone(selected.outcome)}>{selected.outcome}</Chip>}
-          footer={
-            <>
-              <span className="con-row" style={{ gap: '0.5rem' }}>
-                <span className="msym msym-13 con-accent">lock</span>
-                <span>schema sha-256:</span>
-                <span className="con-mono">{(selected.schema_sha256 || DASH).slice(0, 32)}</span>
-              </span>
-              <span className="con-label">path: {selected.healing_path}</span>
-            </>
-          }
-        >
-          <div className="con-grid-2">
-            <div>
-              <div className="con-label" style={{ marginBottom: 6 }}>Original definition</div>
-              {selected.old_definition ? <JsonViewer value={selected.old_definition} /> : <div className="state state-empty"><strong>No old definition recorded.</strong></div>}
-            </div>
-            <div>
-              <div className="con-label" style={{ marginBottom: 6 }}>Patched definition</div>
-              {selected.new_definition ? <JsonViewer value={selected.new_definition} /> : <div className="state state-empty"><strong>No new definition recorded (refusal / not drift).</strong></div>}
-            </div>
-          </div>
-          {(selected.evidence?.length ?? 0) > 0 && (
-            <div style={{ marginTop: '1rem' }}>
-              <div className="con-label" style={{ marginBottom: 6 }}>Evidence · {selected.evidence.length} checks</div>
-              <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: 12 }} className="con-muted">
-                {selected.evidence.map((item, i) => <li key={i}>{item}</li>)}
-              </ul>
-            </div>
-          )}
-          <div className="con-label" style={{ marginTop: '1rem' }}>
-            confidence {selected.confidence.toFixed(2)} · {num(selected.evidence?.length ?? 0)} evidence items
-          </div>
-        </Panel>
-      )}
     </div>
   )
 }

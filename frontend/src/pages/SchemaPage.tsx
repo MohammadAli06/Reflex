@@ -1,10 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import { useApi } from '../hooks/useApi'
-import { Chip, PageHead, Panel } from '../components/console'
-import { ErrorState, LoadingState } from '../components/StateViews'
-import { shortHash } from '../utils/format'
-import type { ConsistencyResult, ErrorStyle, JSONSchema } from '../types'
+import { PageHead, Panel } from '../components/console'
+import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
+import { CopyButton } from '../components/ui/CopyButton'
+import {
+  IconAlertCircle,
+  IconCheck,
+  IconPlay,
+  IconRefresh,
+} from '../components/ui/Icons'
+import type { ConsistencyResult, ErrorStyle, JSONSchema, SchemaResponse } from '../types'
 
 const ERROR_STYLES: ErrorStyle[] = ['clear', 'vague', 'none']
 const HELPERS: Record<ErrorStyle, string> = {
@@ -12,47 +18,55 @@ const HELPERS: Record<ErrorStyle, string> = {
   vague: 'Generic rejection with an opaque message and no field paths.',
   none: 'Silent rejection with an empty error body.',
 }
-const REFUSAL_MUTATIONS = new Set(['M_AMBIGUOUS', 'M_REQUIRED_BODY'])
 
-function Field({ name, schema, required, depth }: { name: string; schema: JSONSchema; required: boolean; depth: number }) {
-  const isObject = schema.type === 'object' && Boolean(schema.properties)
-  const props = (schema.properties ?? {}) as Record<string, JSONSchema>
-  const requiredList = (schema.required ?? []) as string[]
-  return (
-    <>
-      <div
-        className="con-row"
-        style={{
-          justifyContent: 'space-between',
-          background: 'var(--c-bg)',
-          border: '1px solid var(--c-outline-variant)',
-          padding: '0.3125rem 0.75rem',
-          marginLeft: depth * 12,
-          marginTop: 6,
-        }}
-      >
-        <span className="con-row" style={{ gap: '0.5rem' }}>
-          <span className={`con-dot ${required ? 'con-dot-down' : 'con-dot-ok'}`} style={{ borderRadius: 0, opacity: required ? 1 : 0.4 }} />
-          <span className="con-mono" style={{ fontSize: 11, color: required ? 'var(--c-on)' : 'var(--c-on-variant)' }}>{name}</span>
-          <span className="con-muted">:</span>
-          <span className="con-mono con-muted" style={{ fontSize: 11 }}>{String(schema.type ?? 'any')}</span>
-        </span>
-        <span className={`con-mono ${required ? 'con-bad' : 'con-muted'}`} style={{ fontSize: 10, textTransform: 'uppercase' }}>
-          {required ? 'required' : 'optional'}
-        </span>
-      </div>
-      {isObject &&
-        Object.entries(props).map(([child, childSchema]) => (
-          <Field
-            key={child}
-            name={child}
-            schema={childSchema}
-            required={requiredList.includes(child)}
-            depth={depth + 1}
-          />
-        ))}
-    </>
-  )
+const COMMON_MUTATIONS = [
+  { id: 'M_RENAME', label: 'Rename field', desc: 'Rename request field user_id to uid' },
+  { id: 'M_TYPE', label: 'Change type', desc: 'Change user_id type from string to integer' },
+  { id: 'M_NEST', label: 'Nest field', desc: 'Move user_id into nested target.id object' },
+  { id: 'M_HEADER', label: 'Add header', desc: 'Require credential header X-Tenant-Token' },
+  { id: 'M_NEST_TYPE_HEADER', label: 'Combined PS demo', desc: 'Nesting + type change + new header together' },
+]
+
+// Baseline canonical schema (v1)
+const INITIAL_BASELINE_SCHEMA: Record<string, unknown> = {
+  request_schemas: {
+    '/user/fetch': {
+      type: 'object',
+      properties: {
+        user_id: { type: 'string', description: 'Identifier of the user to fetch' },
+      },
+      required: ['user_id'],
+      additionalProperties: false,
+    },
+    '/user/update': {
+      type: 'object',
+      properties: {
+        user_id: { type: 'string', description: 'Identifier of the user to update' },
+        display_name: { type: 'string', description: 'New display name' },
+      },
+      required: ['display_name', 'user_id'],
+      additionalProperties: false,
+    },
+  },
+  required_headers: [],
+}
+
+/** Compute simple line diff for side-by-side JSON panels */
+function computeLineDiff(beforeLines: string[], afterLines: string[]) {
+  const beforeSet = new Set(beforeLines)
+  const afterSet = new Set(afterLines)
+
+  const diffBefore = beforeLines.map((line) => ({
+    text: line,
+    changed: !afterSet.has(line) && line.trim() !== '{' && line.trim() !== '}' && line.trim() !== '],',
+  }))
+
+  const diffAfter = afterLines.map((line) => ({
+    text: line,
+    changed: !beforeSet.has(line) && line.trim() !== '{' && line.trim() !== '}' && line.trim() !== '],',
+  }))
+
+  return { diffBefore, diffAfter }
 }
 
 export function SchemaPage() {
@@ -64,6 +78,24 @@ export function SchemaPage() {
   const [message, setMessage] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [consistency, setConsistency] = useState<ConsistencyResult | null>(null)
+
+  // Store previous schema before mutation was applied
+  const [previousSchema, setPreviousSchema] = useState<SchemaResponse | null>(null)
+
+  useEffect(() => {
+    if (schema.data && !previousSchema && schema.data.version > 1) {
+      // If active schema is already mutated, use baseline as before
+      setPreviousSchema({
+        version: 1,
+        sha256: 'initial-baseline-hash',
+        short_hash: 'v1-base',
+        request_schemas: INITIAL_BASELINE_SCHEMA.request_schemas as Record<string, JSONSchema>,
+        required_headers: [],
+        response_schemas: {},
+        error_style: 'clear',
+      })
+    }
+  }, [schema.data])
 
   async function run(action: () => Promise<ConsistencyResult>, note: string) {
     setBusy(true)
@@ -87,225 +119,372 @@ export function SchemaPage() {
     setMessage(null)
     setFailed(false)
     try {
+      if (schema.data) {
+        setPreviousSchema(schema.data)
+      }
       const result = await api.mutate(selected, errorStyle)
       setConsistency(result.consistency)
-      setMessage(`Applied ${selected} · schema now v${result.version}`)
+      setMessage(`Successfully applied mutation: ${selected}. Schema updated to v${result.version}.`)
       schema.reload()
     } catch (err) {
-      setMessage(`Failed: ${err instanceof ApiError ? err.message : String(err)}`)
+      setMessage(`Failed to mutate schema: ${err instanceof ApiError ? err.message : String(err)}`)
       setFailed(true)
     } finally {
       setBusy(false)
     }
   }
 
-  if (schema.loading) return <LoadingState label="Loading schema…" />
+  if (schema.loading) return <LoadingState label="Loading schema specifications…" />
   if (schema.error) return <ErrorState message={schema.error} onRetry={schema.reload} />
 
   const data = schema.data!
 
+  // Prepare before and after line arrays
+  const beforeObj = previousSchema
+    ? {
+        version: previousSchema.version,
+        required_headers: previousSchema.required_headers,
+        request_schemas: previousSchema.request_schemas,
+      }
+    : {
+        version: 1,
+        required_headers: [],
+        request_schemas: INITIAL_BASELINE_SCHEMA.request_schemas,
+      }
+
+  const afterObj = {
+    version: data.version,
+    required_headers: data.required_headers,
+    request_schemas: data.request_schemas,
+  }
+
+  const beforeLines = JSON.stringify(beforeObj, null, 2).split('\n')
+  const afterLines = JSON.stringify(afterObj, null, 2).split('\n')
+  const { diffBefore, diffAfter } = computeLineDiff(beforeLines, afterLines)
+
   return (
     <div className="con-page">
       <PageHead
-        eyebrow={
-          <>
-            Registry state <span className="con-muted">/</span> <span className="con-accent">Injector &amp; mutation matrix</span>
-          </>
-        }
-        title="Schema mutation"
+        eyebrow={<span>Break the API on purpose, then watch recovery</span>}
+        title="Schema"
+        subtitle="Introduce a breaking change into the mock API, then replay it on the comparison page."
         right={
-          <>
-            <span className="con-row" style={{ gap: '0.5rem', border: '1px solid var(--c-outline-variant)', padding: '0.25rem 0.5rem' }}>
-              <span className="con-dot con-dot-ok" style={{ borderRadius: 0 }} />
-              <span className="con-label">target:</span>
-              <span className="con-mono" style={{ fontSize: 11 }}>LOCAL MOCK REGISTRY</span>
-            </span>
-            <button className="cbtn" onClick={() => schema.reload()}>
-              <span className="msym msym-13">download</span> Reload schema
+          <div className="con-row" style={{ gap: 12 }}>
+            <button
+              type="button"
+              className="cbtn cbtn-ghost"
+              onClick={() => schema.reload()}
+              disabled={busy}
+            >
+              <IconRefresh size={14} />
+              <span>Reload</span>
             </button>
-          </>
+          </div>
         }
       />
 
-      <div className="con-grid-2-73">
-        <Panel
-          title={
-            <span className="con-row" style={{ gap: '0.75rem' }}>
-              <span className="con-mono" style={{ border: '1px solid var(--c-outline-variant)', padding: '1px 6px' }}>v{data.version}</span>
-              <span className="con-row" style={{ gap: '0.25rem' }}>
-                <span className="msym msym-13 con-accent">lock</span>
-                <span style={{ letterSpacing: '0.08em' }}>{shortHash(data.sha256, 12)}</span>
-              </span>
-              <span className="con-muted">|</span>
-              <span className="con-label">
-                Required headers: {data.required_headers.length ? data.required_headers.map((h) => h.name).join(', ') : 'none'}
-              </span>
-            </span>
-          }
-          actions={<span className="con-label">strict_mode: true</span>}
-          footer={
-            <>
-              <span>Schema parser status // recursive descent deterministic</span>
-              <Chip tone="ok">validation tree ok</Chip>
-            </>
-          }
-        >
-          {Object.entries(data.request_schemas).map(([endpoint, body]) => (
-            <div key={endpoint} style={{ marginBottom: '1.25rem' }}>
-              <div className="con-row" style={{ justifyContent: 'space-between', background: 'var(--c-container)', border: '1px solid var(--c-outline-variant)', padding: '0.375rem 0.75rem' }}>
-                <span className="con-row" style={{ gap: '0.5rem' }}>
-                  <span className="con-mono" style={{ background: 'var(--c-primary)', color: 'var(--c-on-primary)', fontSize: 9, fontWeight: 700, padding: '1px 4px', letterSpacing: '0.1em' }}>POST</span>
-                  <span className="con-mono" style={{ fontSize: 12 }}>{endpoint}</span>
-                </span>
-                <span className="con-label">endpoint</span>
-              </div>
-              {Object.entries((body.properties ?? {}) as Record<string, JSONSchema>).map(([name, field]) => (
-                <Field
-                  key={name}
-                  name={name}
-                  schema={field}
-                  required={((body.required ?? []) as string[]).includes(name)}
-                  depth={0}
-                />
-              ))}
-            </div>
-          ))}
-        </Panel>
+      {message && (
+        <div className={`notice ${failed ? 'notice-error' : ''}`}>
+          <div className="con-row" style={{ gap: 8 }}>
+            {failed ? <IconAlertCircle size={16} /> : <IconCheck size={16} style={{ color: 'var(--success-green)' }} />}
+            <span>{message}</span>
+          </div>
+        </div>
+      )}
 
-        <Panel
-          title="Inject drift // schema mutation generator"
-          actions={<Chip tone="mute">{mutations.data?.mutations.length ?? 0} vectors</Chip>}
-        >
-          <p className="con-label" style={{ textTransform: 'none', letterSpacing: 0, marginTop: 0 }}>
-            Select a synthetic mutation vector to evaluate agent self-healing resilience.
-          </p>
-          {mutations.loading && (
-            <div className="notice" style={{ marginTop: '0.75rem' }}>Loading mutation vectors…</div>
-          )}
-          {mutations.error && (
-            <div className="notice notice-error" style={{ marginTop: '0.75rem' }}>
-              Could not load mutation vectors: {mutations.error}
-              <button className="cbtn cbtn-sm" style={{ marginLeft: '0.5rem' }} onClick={mutations.reload}>Retry</button>
-            </div>
-          )}
-
-          <div style={{ marginTop: '0.75rem', display: 'flex', flexDirection: 'column' }}>
-            {mutations.data?.mutations.map((m) => {
-              const on = selected === m.id
-              const refusal = REFUSAL_MUTATIONS.has(m.id)
-              return (
-                <label
-                  key={m.id}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
-                    padding: '0.625rem 0.75rem',
-                    cursor: 'pointer',
-                    borderLeft: `2px solid ${on ? 'var(--c-primary)' : 'transparent'}`,
-                    borderBottom: '1px solid var(--c-outline-variant)',
-                    background: on ? 'var(--c-container)' : 'transparent',
-                  }}
-                >
-                  <span className="con-row" style={{ justifyContent: 'space-between' }}>
-                    <span className="con-row" style={{ gap: '0.5rem' }}>
-                      <input type="radio" name="mutation_vector" checked={on} onChange={() => setSelected(m.id)} />
-                      <span className={`con-mono ${on ? 'con-accent' : ''}`} style={{ fontSize: 11, fontWeight: 500 }}>{m.id}</span>
-                    </span>
-                    <Chip tone={refusal ? 'warn' : 'ok'}>
-                      expected: {refusal ? 'refusal' : 'recoverable'}
-                    </Chip>
-                  </span>
-                  <span className="con-muted" style={{ fontSize: 12, paddingLeft: 20, textTransform: 'none', letterSpacing: 0 }}>
-                    {m.label} — {m.description}
-                  </span>
-                </label>
-              )
-            })}
+      <div className="card" style={{ padding: 24 }}>
+        <div className="con-row" style={{ justifyContent: 'space-between', marginBottom: 16, alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <h2 className="text-h2" style={{ fontSize: 15, marginBottom: 4 }}>
+              Breaking change
+            </h2>
+            <p className="text-muted" style={{ margin: 0, fontSize: 13 }}>
+              Pick a change, pick how much detail the error gives, then apply it.
+            </p>
           </div>
 
-          <div style={{ marginTop: '1rem', borderTop: '1px solid var(--c-outline-variant)', paddingTop: '0.75rem' }}>
-            <div className="con-row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
-              <span className="con-label">Error response profile</span>
-              <span className="con-label">HTTP 4xx / 5xx</span>
-            </div>
-            <div className="csegment">
+          <div className="con-row" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className="cbtn cbtn-primary"
+              style={{ padding: '8px 18px' }}
+              disabled={busy || !mutations.data}
+              onClick={apply}
+            >
+              <IconPlay size={14} />
+              <span>Apply change</span>
+            </button>
+
+            <button
+              type="button"
+              className="cbtn cbtn-ghost"
+              disabled={busy}
+              onClick={() => {
+                if (!window.confirm('Reset the mock schema to the starting version (v1)?')) return
+                run(() => api.reset().then((r) => r.consistency), 'Schema reset to the starting version.')
+              }}
+            >
+              <span>Reset schema</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="text-label" style={{ marginBottom: 8 }}>Change to apply</div>
+        <div role="radiogroup" aria-label="Schema change" style={{ display: 'flex', flexDirection: 'column', border: '1px solid var(--hairline)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: 20 }}>
+          {COMMON_MUTATIONS.map((m, i) => {
+            const isSelected = selected === m.id
+            return (
+              <button
+                key={m.id}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                onClick={() => setSelected(m.id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '12px 16px',
+                  border: 'none',
+                  borderTop: i === 0 ? 'none' : '1px solid var(--hairline)',
+                  background: isSelected ? 'var(--navy-soft)' : 'var(--surface)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  width: '100%',
+                }}
+              >
+                <span
+                  style={{
+                    flex: 'none',
+                    width: 16,
+                    height: 16,
+                    borderRadius: '50%',
+                    border: `1.5px solid ${isSelected ? 'var(--brand)' : 'var(--hairline-2)'}`,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {isSelected && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand)' }} />}
+                </span>
+                <span style={{ flex: 1 }}>
+                  <span style={{ display: 'block', fontWeight: 600, fontSize: 13 }}>{m.label}</span>
+                  <span className="text-muted" style={{ display: 'block', fontSize: 12 }}>{m.desc}</span>
+                </span>
+                {m.id === 'M_NEST_TYPE_HEADER' && (
+                  <span className="text-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>Recommended</span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        <div
+          style={{
+            padding: 16,
+            background: 'var(--surface-2)',
+            borderRadius: 'var(--radius)',
+            border: '1px solid var(--hairline)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          <div className="con-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <span className="text-label">Error detail level</span>
+            <div className="csegment" role="group" aria-label="Error detail level">
               {ERROR_STYLES.map((style) => (
-                <button key={style} className={style === errorStyle ? 'on' : ''} onClick={() => setErrorStyle(style)}>
+                <button
+                  key={style}
+                  type="button"
+                  className={style === errorStyle ? 'on' : ''}
+                  onClick={() => setErrorStyle(style)}
+                  aria-pressed={style === errorStyle}
+                  style={{ textTransform: 'capitalize' }}
+                >
                   {style}
                 </button>
               ))}
             </div>
-            <div className="con-muted" style={{ fontSize: 12, marginTop: 6, textTransform: 'none', letterSpacing: 0 }}>
-              {HELPERS[errorStyle]}
-            </div>
           </div>
-
-          <div className="con-row" style={{ marginTop: '1rem', borderTop: '1px solid var(--c-outline-variant)', paddingTop: '0.75rem', justifyContent: 'space-between' }}>
-            <span className="con-row">
-              <button className="cbtn cbtn-primary" disabled={busy || !mutations.data} onClick={apply}>
-                {busy ? 'Working…' : 'Apply mutation'}
-              </button>
-              <button
-                className="cbtn"
-                disabled={busy}
-                onClick={() => {
-                  if (!window.confirm('Reset the mock schema to the initial version? This bumps the version.')) return
-                  run(() => api.reset().then((r) => r.consistency), 'Schema reset')
-                }}
-              >
-                Reset schema
-              </button>
-            </span>
-            <button className="cbtn cbtn-ghost" disabled={busy} onClick={() => run(() => api.consistency(), 'Consistency suite executed')}>
-              <span className="msym msym-13">sync</span> Check consistency
-            </button>
+          <div className="text-muted" style={{ fontSize: 12 }}>
+            {HELPERS[errorStyle]}
           </div>
-
-          {message && <div className={`notice ${failed ? 'notice-error' : ''}`} style={{ marginTop: '0.75rem' }}>{message}</div>}
-        </Panel>
+        </div>
       </div>
 
       <Panel
         title={
-          <span className="con-row" style={{ gap: '0.75rem' }}>
-            <span className="msym msym-18 con-accent">verified</span>
-            Consistency check // validation suite
-          </span>
+          <div className="con-row" style={{ gap: 10 }}>
+            <span>Before and after</span>
+            <span className="font-mono text-muted" style={{ fontSize: 12 }}>
+              v{beforeObj.version} → v{afterObj.version}
+            </span>
+          </div>
         }
         actions={
-          <>
-            <span className="con-label">{consistency ? `${consistency.checks.filter((c) => c.ok).length}/${consistency.checks.length} assertions confirmed` : 'not run yet'}</span>
-            <Chip tone={consistency?.pass ? 'ok' : consistency ? 'bad' : 'mute'}>
-              {consistency ? (consistency.pass ? 'pass' : 'fail') : 'idle'}
-            </Chip>
-          </>
+          <div className="con-row" style={{ gap: 8, fontSize: 12 }}>
+            <span className="text-muted">Current hash:</span>
+            <CopyButton text={data.sha256} truncateLength={10} />
+          </div>
         }
-        footer={
-          <span className="con-row" style={{ gap: '0.5rem' }}>
-            <span className="con-dot con-dot-ok" style={{ borderRadius: 0 }} />
-            <span>Registry seam conformance // deterministic execution sandbox</span>
-          </span>
+      >
+        <div className="con-grid-2">
+          <div
+            className="card"
+            style={{
+              background: 'var(--surface-2)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                padding: '10px 16px',
+                background: 'var(--surface)',
+                borderBottom: '1px solid var(--hairline)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 13 }}>Current schema (v{beforeObj.version})</span>
+              <span className="text-muted font-mono" style={{ fontSize: 11 }}>Removed lines in red</span>
+            </div>
+
+            <div style={{ padding: 12, overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
+              <pre style={{ margin: 0, fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.5 }}>
+                {diffBefore.map((item, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      background: item.changed ? 'var(--brand-red-subtle)' : 'transparent',
+                      color: item.changed ? 'var(--brand-red)' : 'var(--text-secondary)',
+                      padding: '1px 6px',
+                      borderRadius: 2,
+                      display: 'flex',
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ userSelect: 'none', color: item.changed ? 'var(--brand-red)' : 'var(--text-muted)', width: 14 }}>
+                      {item.changed ? '−' : ' '}
+                    </span>
+                    <span>{item.text}</span>
+                  </div>
+                ))}
+              </pre>
+            </div>
+          </div>
+
+          <div
+            className="card"
+            style={{
+              background: 'var(--surface-2)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                padding: '10px 16px',
+                background: 'var(--surface)',
+                borderBottom: '1px solid var(--hairline)',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 13 }}>
+                Changed schema (v{afterObj.version})
+              </span>
+              <span className="text-muted font-mono" style={{ fontSize: 11 }}>Added lines in green</span>
+            </div>
+
+            <div style={{ padding: 12, overflowX: 'auto', maxHeight: 380, overflowY: 'auto' }}>
+              <pre style={{ margin: 0, fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.5 }}>
+                {diffAfter.map((item, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      background: item.changed ? 'var(--success-green-subtle)' : 'transparent',
+                      color: item.changed ? 'var(--success-green)' : 'var(--text-primary)',
+                      padding: '1px 6px',
+                      borderRadius: 2,
+                      display: 'flex',
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ userSelect: 'none', color: item.changed ? 'var(--success-green)' : 'var(--text-muted)', width: 14 }}>
+                      {item.changed ? '+' : ' '}
+                    </span>
+                    <span>{item.text}</span>
+                  </div>
+                ))}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel
+        title="Consistency checks"
+        actions={
+          <div className="con-row" style={{ gap: 8 }}>
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              {consistency
+                ? `${consistency.checks.filter((c) => c.ok).length}/${consistency.checks.length} passed`
+                : 'Not run yet'}
+            </span>
+            <button
+              type="button"
+              className="cbtn cbtn-sm"
+              disabled={busy}
+              onClick={() => run(() => api.consistency(), 'Consistency checks finished.')}
+            >
+              <IconRefresh size={12} />
+              <span>Run checks</span>
+            </button>
+          </div>
         }
       >
         {consistency ? (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {consistency.checks.map((check) => (
-              <div key={check.name} className="con-row" style={{ justifyContent: 'space-between', padding: '0.625rem 0', borderBottom: '1px solid var(--c-outline-variant)' }}>
-                <span className="con-row" style={{ gap: '0.75rem', minWidth: 0 }}>
-                  <span className={`msym msym-18 ${check.ok ? 'con-accent' : 'con-bad'}`}>{check.ok ? 'check_circle' : 'cancel'}</span>
-                  <span className="con-mono" style={{ fontSize: 11, fontWeight: 600 }}>{check.name}</span>
-                  <span className="con-muted" style={{ fontSize: 12, textTransform: 'none', letterSpacing: 0 }}>{check.detail}</span>
+              <div
+                key={check.name}
+                className="con-row"
+                style={{
+                  justifyContent: 'space-between',
+                  padding: '8px 12px',
+                  background: 'var(--bg-subtle)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-subtle)',
+                }}
+              >
+                <div className="con-row" style={{ gap: 10 }}>
+                  <span
+                    style={{
+                      color: check.ok ? 'var(--success-strong)' : 'var(--brand-text)',
+                    }}
+                  >
+                    {check.ok ? <IconCheck size={16} strokeWidth={2.5} /> : <IconAlertCircle size={16} />}
+                  </span>
+                  <span className="font-mono" style={{ fontWeight: 600, fontSize: 12 }}>
+                    {check.name}
+                  </span>
+                  <span className="text-muted" style={{ fontSize: 12 }}>
+                    {check.detail}
+                  </span>
+                </div>
+                <span className={`badge badge-${check.ok ? 'success' : 'failure'}`} style={{ fontSize: 11 }}>
+                  {check.ok ? 'Passed' : 'Failed'}
                 </span>
-                <Chip tone={check.ok ? 'ok' : 'bad'}>{check.ok ? 'ok' : 'fail'}</Chip>
               </div>
             ))}
           </div>
         ) : (
-          <div className="state state-empty">
-            <strong>Consistency suite not run.</strong>
-            <span>Apply a mutation or press “Check consistency”.</span>
-          </div>
+          <EmptyState
+            message="Checks not run yet."
+            hint="Apply a change above or run the checks to verify the schema."
+          />
         )}
       </Panel>
     </div>

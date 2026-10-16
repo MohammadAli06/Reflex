@@ -18,7 +18,7 @@ export function PageHead({
         <h1 className="con-h1">{title}</h1>
         {subtitle && <p className="con-sub">{subtitle}</p>}
       </div>
-      {right && <div className="con-row">{right}</div>}
+      {right && <div className="con-row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>{right}</div>}
     </div>
   )
 }
@@ -48,43 +48,60 @@ export function Panel({
   )
 }
 
-export function Chip({ tone = 'mute', children }: { tone?: 'ok' | 'warn' | 'bad' | 'mute'; children: ReactNode }) {
+export function Chip({
+  tone = 'mute',
+  children,
+}: {
+  tone?: 'ok' | 'warn' | 'bad' | 'mute' | 'reflex'
+  children: ReactNode
+}) {
   return <span className={`chip chip-${tone}`}>{children}</span>
 }
 
-/** Miniature "continuum" seam: healthy line -> suture -> healthy line. */
+/** Miniature status line. */
 export function SeamStrip({ variant = 'healed' }: { variant?: 'healed' | 'fault' }) {
   if (variant === 'fault') {
     return (
-      <div className="seam-strip">
-        <span className="seam-line" style={{ maxWidth: '38%' }} />
-        <span className="seam-fault">
-          <span className="seam-cap" />
-          <span className="seam-gap" />
-          <span className="seam-cap" />
-        </span>
-        <span className="seam-line" style={{ flex: 1, background: 'transparent', borderTop: '1px dotted var(--c-outline-variant)' }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '8px 0' }}>
+        <span style={{ height: 2, flex: '0 0 40%', background: 'var(--brand-red)', borderRadius: 2 }} />
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--brand-red)', fontFamily: 'var(--font-mono)' }}>BROKEN</span>
+        <span style={{ height: 2, flex: 1, borderTop: '2px dashed var(--neutral-grey-border)' }} />
       </div>
     )
   }
   return (
-    <div className="seam-strip">
-      <span className="seam-line" style={{ maxWidth: '26%' }} />
-      <span className="seam-stitches">
-        <span className="seam-stitch" />
-        <span className="seam-stitch" />
-        <span className="seam-stitch" />
-      </span>
-      <span className="seam-line seam-line-ok" style={{ flex: 1 }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '8px 0' }}>
+      <span style={{ height: 2, flex: '0 0 30%', background: 'var(--neutral-grey)', borderRadius: 2 }} />
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--reflex-cyan)', fontFamily: 'var(--font-mono)' }}>HEALED</span>
+      <span style={{ height: 2, flex: 1, background: 'var(--reflex-cyan)', borderRadius: 2 }} />
     </div>
   )
 }
 
-export function Metric({ label, value, tone }: { label: string; value: ReactNode; tone?: 'ok' | 'bad' | 'warn' }) {
+export function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string
+  value: ReactNode
+  tone?: 'ok' | 'bad' | 'warn' | 'reflex'
+}) {
   return (
     <div>
       <div className="con-label">{label}</div>
-      <div className={`con-mono ${tone === 'ok' ? 'con-accent' : tone === 'bad' ? 'con-bad' : tone === 'warn' ? 'con-warn' : ''}`}>
+      <div
+        className={`con-mono ${
+          tone === 'ok'
+            ? 'con-accent'
+            : tone === 'bad'
+            ? 'con-bad'
+            : tone === 'warn'
+            ? 'con-warn'
+            : ''
+        }`}
+        style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}
+      >
         {value}
       </div>
     </div>
