@@ -256,8 +256,8 @@ export function LandingPage() {
               </div>
             </div>
 
-            <div className="lp-terminal" role="img" aria-label="Animation of a failing request being repaired">
-              <div className="lp-term-bar"><i /><i /><i /><span>replay — combined demo</span></div>
+            <div className="lp-terminal" role="img" aria-label="Illustration of a failing request being repaired">
+              <div className="lp-term-bar"><i /><i /><i /><span>replay — illustration</span></div>
               <div className="lp-term-body">
                 <div className="lp-term-old">{'{"user_id": "123"}'}</div>
                 <div className="lp-term-new">{'{"target": {"id": 123}}'}</div>
@@ -265,6 +265,7 @@ export function LandingPage() {
                 <div className="lp-term-status">
                   <span className="lp-term-dot" />
                   <span>Patched in memory, <b>no restart</b></span>
+                  <span className="lp-term-note" style={{ marginLeft: 8, opacity: 0.75 }}>Illustration</span>
                 </div>
               </div>
             </div>
@@ -275,7 +276,7 @@ export function LandingPage() {
             <div className="lp-seam-meta">
               <span>Failing request</span>
               <span>Audit entry {runId ? `#${runId}` : '—'}</span>
-              <span>Verified upstream</span>
+              <span>Illustration · repaired-in time from recorded runs</span>
             </div>
           </div>
         </section>

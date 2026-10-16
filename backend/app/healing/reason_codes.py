@@ -12,6 +12,7 @@ NEEDS_HUMAN_REVIEW = "needs_human_review"
 AMBIGUOUS_RESPONSE_MAPPING = "ambiguous_response_mapping"
 NOT_DRIFT = "not_drift"
 AUTH_REJECTED = "auth_rejected"
+UNTRUSTED_SCHEMA = "untrusted_schema"
 
 ALL = {
     AMBIGUOUS_MAPPING,
@@ -25,4 +26,5 @@ ALL = {
     AMBIGUOUS_RESPONSE_MAPPING,
     NOT_DRIFT,
     AUTH_REJECTED,
+    UNTRUSTED_SCHEMA,
 }

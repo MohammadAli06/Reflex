@@ -19,7 +19,7 @@ from ..healing.secrets import EmptySecretsProvider, EnvSecretsProvider, SecretsP
 from ..llm.base import LLMClient
 from ..llm.gemini import build_llm
 from ..registry.executor import Executor
-from ..registry.tasks import get_task
+from ..registry.tasks import Task, get_task
 from ..registry.tool_registry import ToolRegistry
 from ..registry.tools import initial_definitions
 
@@ -37,7 +37,12 @@ class Harness:
         audit: AuditLog | None = None,
         revision_sink=None,
         snapshot_sink=None,
+        provenance_sink=None,
+        provenance_error_sink=None,
         run_id: str | None = None,
+        definitions: dict | None = None,
+        tasks: dict | None = None,
+        mock_public_key: str = "",
     ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(base_url=settings.mock_api_url, timeout=5.0)
@@ -48,13 +53,37 @@ class Harness:
         self.executor = Executor(self.client, self.secrets)
         self._revision_sink = revision_sink
         self._snapshot_sink = snapshot_sink
+        self._provenance_sink = provenance_sink
+        self._provenance_error_sink = provenance_error_sink
         self._run_id = run_id
+        self._definitions = definitions
+        self._tasks = tasks
+        self._mock_public_key = mock_public_key
         self.registry = self._fresh_registry()
         self.events: list[TraceEvent] = []
         self.subscribers: list[Subscriber] = []
 
+    def _task(self, task_id: str):
+        """Resolve a task, preferring this harness's own definitions."""
+        if self._tasks is not None and task_id in self._tasks:
+            return self._tasks[task_id]
+        return get_task(task_id)
+
     def _fresh_registry(self) -> ToolRegistry:
-        return ToolRegistry(initial_definitions(), on_commit=self._record_revision)
+        definitions = self._definitions if self._definitions is not None else initial_definitions()
+        return ToolRegistry(definitions, on_commit=self._record_revision)
+
+    def set_definitions(self, definitions: dict | None, tasks: dict | None = None) -> None:
+        """Swap the tool/task set and start from a clean registry.
+
+        Used by the real-spec harness so one harness can serve many cases whose
+        starting contract is a different OpenAPI operation each time.
+        """
+        self._definitions = definitions
+        if tasks is not None:
+            self._tasks = tasks
+        self.registry = self._fresh_registry()
+        self.events = []
 
     def _record_revision(self, name: str, definition) -> None:
         if self._revision_sink is None:
@@ -121,16 +150,37 @@ class Harness:
         self, task_id: str, run_id: str, *, secrets: SecretsProvider | None = None,
         emitter: EventEmitter | None = None,
     ) -> AgentRunResult:
-        task = get_task(task_id)
+        task = self._task(task_id)
         agent = HealingAgent(
             self.registry, self.executor, secrets or self.secrets, self.client,
             self.audit, self.settings, snapshot_sink=self._snapshot_sink,
+            provenance_sink=self._provenance_sink,
+            provenance_error_sink=self._provenance_error_sink,
+            mock_public_key=self._mock_public_key,
+        )
+        emitter = emitter or self.make_emitter(run_id, "healing")
+        return agent.run(task, run_id, emitter=emitter)
+
+    def run_healing_tool(
+        self, tool: str, args: dict[str, Any], run_id: str, *,
+        emitter: EventEmitter | None = None,
+    ) -> AgentRunResult:
+        """Run a caller-supplied invocation through the same healing agent."""
+        definition = self.registry.get(tool)
+        task = Task(id=f"sdk:{tool}", tool=tool, args=dict(args),
+                    description="SDK invocation", write=definition.write)
+        agent = HealingAgent(
+            self.registry, self.executor, self.secrets, self.client,
+            self.audit, self.settings, snapshot_sink=self._snapshot_sink,
+            provenance_sink=self._provenance_sink,
+            provenance_error_sink=self._provenance_error_sink,
+            mock_public_key=self._mock_public_key,
         )
         emitter = emitter or self.make_emitter(run_id, "healing")
         return agent.run(task, run_id, emitter=emitter)
 
     def run_baseline(self, task_id: str, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
-        task = get_task(task_id)
+        task = self._task(task_id)
         agent = BaselineAgent(
             self.registry, self.executor, self.secrets, self.client, self.settings, self.llm
         )

@@ -7,15 +7,13 @@ import { StatCard } from '../components/StatCard'
 import { CopyButton } from '../components/ui/CopyButton'
 import {
   IconActivity,
-  IconArrowRight,
-  IconBarChart,
   IconCheck,
   IconDatabase,
   IconPlay,
   IconRefresh,
   IconShieldCheck,
 } from '../components/ui/Icons'
-import { DASH, clockTime, num, pct, secs } from '../utils/format'
+import { DASH, clockTime, num, pct, relTime, secs } from '../utils/format'
 import type { RunRecord } from '../types'
 
 function AgentSummaryCard({
@@ -109,6 +107,7 @@ function AgentSummaryCard({
 export function Dashboard() {
   const status = useApi(() => api.status(), [])
   const metrics = useApi(() => api.metrics(), [])
+  const runs = useApi(() => api.listRuns(), [])
 
   if (status.loading) return <LoadingState label="Loading registry dashboard…" />
   if (status.error) return <ErrorState message={status.error} onRetry={status.reload} />
@@ -120,6 +119,7 @@ export function Dashboard() {
   const summary = metrics.data?.agents?.healing?.overall
   const version = data.schema_version
   const sampleN = summary?.available ? summary.n : null
+  const recentRuns = (runs.data?.runs ?? []).slice(0, 5)
 
   return (
     <div className="con-page">
@@ -178,25 +178,25 @@ export function Dashboard() {
         />
 
         <StatCard
-          label="Token overhead"
-          value={summary?.available ? num(summary.tokens_total) : '0'}
-          hint={
-            <span>
-              Model calls used during repair{sampleN !== null ? ` · n = ${num(sampleN)}` : ''}
-            </span>
-          }
-          icon={<IconBarChart size={18} />}
-        />
-
-        <StatCard
-          label="Safe refusals"
-          value={summary?.available ? num(summary.correct_refusals) : '—'}
+          label="Correct refusals"
+          value={summary?.available ? num(summary.correct_refusals) : DASH}
           hint={
             <span>
               Stopped rather than guessed{sampleN !== null ? ` · n = ${num(sampleN)}` : ''}
             </span>
           }
           icon={<IconShieldCheck size={18} />}
+        />
+
+        <StatCard
+          label="Wrong patches"
+          value={summary?.available ? num(summary.wrong_patches) : DASH}
+          hint={
+            <span>
+              Claimed recovery, failed verification{sampleN !== null ? ` · n = ${num(sampleN)}` : ''}
+            </span>
+          }
+          icon={<IconActivity size={18} />}
         />
       </div>
 
@@ -282,32 +282,56 @@ export function Dashboard() {
         </div>
 
         <div className="card" style={{ padding: 24, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-          <div>
-            <h2 className="serif" style={{ fontSize: 24, fontWeight: 500, margin: '0 0 8px', letterSpacing: '-0.01em' }}>
-              See a repair happen
+          <div className="con-row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+            <h2 className="text-h2" style={{ fontSize: 15, margin: 0 }}>
+              Recent runs
             </h2>
-            <p style={{ margin: 0, fontSize: 14, color: 'var(--muted)', lineHeight: 1.5 }}>
-              Replay a breaking schema change against both agents and watch Reflex diagnose, patch, and verify — or stop safely when it can&apos;t.
-            </p>
+            <Link to="/console/runs" className="text-muted" style={{ fontSize: 12 }}>
+              Open Runs →
+            </Link>
           </div>
 
-          <div style={{ marginTop: 20, display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Link
-              to="/console/compare"
-              className="cbtn cbtn-primary"
-              style={{ padding: '10px 22px', fontSize: 14 }}
-            >
-              <span>Run the demo</span>
-              <IconArrowRight size={16} />
-            </Link>
-            <Link
-              to="/console/safety"
-              className="cbtn cbtn-ghost"
-              style={{ fontSize: 13 }}
-            >
-              <span>How safety works</span>
-            </Link>
-          </div>
+          {runs.loading ? (
+            <p className="text-muted" style={{ fontSize: 13, margin: 0 }}>Loading runs…</p>
+          ) : recentRuns.length === 0 ? (
+            <EmptyState message="No runs recorded yet." hint="Run a comparison to populate this list." />
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {recentRuns.map((run) => {
+                const healingRecord = run.records.find((r) => r.agent === 'healing')
+                return (
+                  <Link
+                    key={run.run_id}
+                    to={`/console/runs/${run.run_id}`}
+                    className="con-row card"
+                    style={{ padding: '10px 14px', fontSize: 13, justifyContent: 'space-between', textDecoration: 'none', color: 'inherit' }}
+                  >
+                    <span className="con-row" style={{ gap: 8 }}>
+                      <span className="font-mono" style={{ fontWeight: 600 }}>
+                        {run.run_id.slice(0, 10)}…
+                      </span>
+                      <span className="text-muted">{run.case_ids.join(', ')}</span>
+                    </span>
+                    <span className="con-row" style={{ gap: 8 }}>
+                      <span className="text-muted" style={{ fontSize: 12 }}>{relTime(run.started_at)}</span>
+                      <span
+                        className={`badge badge-${
+                          healingRecord?.outcome === 'recovered'
+                            ? 'success'
+                            : healingRecord?.outcome === 'refused'
+                            ? 'warning'
+                            : 'neutral'
+                        }`}
+                        style={{ fontSize: 11 }}
+                      >
+                        {healingRecord?.outcome ?? run.status}
+                      </span>
+                    </span>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
         </div>
       </div>
 

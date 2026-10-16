@@ -62,7 +62,18 @@ def test_mutate_then_consistency(clients):
 def test_catalogs(clients):
     assert clients.get("/api/mutations").json()["mutations"]
     assert clients.get("/api/cases").json()["cases"]
-    assert len(clients.get("/api/scenarios").json()["scenarios"]) == 5
+    scenarios = clients.get("/api/scenarios").json()["scenarios"]
+    assert len(scenarios) == 6
+    assert any(s["id"] == "tampered_schema" for s in scenarios)
+
+
+def test_tampered_schema_is_refused_and_never_patched(clients):
+    """A schema we cannot authenticate must not change the registry."""
+    before = clients.get("/api/registry").json()
+    result = clients.post("/api/scenarios/tampered_schema/run").json()
+    assert result["outcome"] == "refused"
+    assert result["reason_code"] == "untrusted_schema"
+    assert clients.get("/api/registry").json() == before
 
 
 def test_scenario_refusal(clients):
@@ -77,6 +88,38 @@ def test_scenario_recovery(clients):
     result = clients.post("/api/scenarios/recover_ps_demo/run").json()
     assert result["outcome"] == "recovered"
     assert any(e["type"] == "patch_applied" for e in result["events"])
+
+
+def test_sdk_adapter_executes_real_engine_and_persists_trace_and_audit(clients):
+    assert {tool["name"] for tool in clients.get("/api/sdk/tools").json()["tools"]} == {
+        "fetch_user", "update_user"
+    }
+    normal = clients.post("/api/sdk/call", json={"tool": "fetch_user", "args": {"user_id": "123"}})
+    assert normal.status_code == 200, normal.text
+    assert normal.json()["outcome"] == "recovered"
+    assert normal.json()["healed"] is False
+
+    clients.post("/api/mutate", json={"mutation_id": "M_NEST"}).raise_for_status()
+    repaired = clients.post("/api/sdk/call", json={"tool": "fetch_user", "args": {"user_id": "123"}})
+    assert repaired.status_code == 200, repaired.text
+    assert repaired.json()["outcome"] == "recovered"
+    assert repaired.json()["healed"] is True
+    run_id = repaired.json()["run_id"]
+    assert "patch_applied" in clients.get(f"/api/runs/{run_id}/events").text
+    assert clients.get("/api/audit", params={"run_id": run_id}).json()["entries"]
+
+
+def test_sdk_adapter_preserves_refusal_reason(clients):
+    clients.post("/api/mutate", json={"mutation_id": "M_AMBIGUOUS"}).raise_for_status()
+    response = clients.post("/api/sdk/call", json={"tool": "fetch_user", "args": {"user_id": "123"}})
+    assert response.status_code == 200, response.text
+    assert response.json()["outcome"] == "refused"
+    assert response.json()["reason_code"] == "ambiguous_mapping"
+
+
+def test_sdk_adapter_rejects_unknown_tool(clients):
+    response = clients.post("/api/sdk/call", json={"tool": "not_registered", "args": {}})
+    assert response.status_code == 404
 
 
 def test_origin_guard_rejects_untrusted(clients):

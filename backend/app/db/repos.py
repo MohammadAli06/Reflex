@@ -408,6 +408,24 @@ class SessionRepo:
         with session_scope(self._db) as session:
             session.execute(delete(SessionRow).where(SessionRow.token == token))
 
+    def list_active(self) -> list[dict[str, Any]]:
+        """Live sessions as metadata only - never the token itself."""
+        with session_scope(self._db) as session:
+            rows = session.execute(
+                select(SessionRow).order_by(SessionRow.id.asc())).scalars().all()
+            now = _utcnow()
+            users = {u.id: u.username for u in session.execute(select(User)).scalars().all()}
+            return [{"id": r.id, "username": users.get(r.user_id, "unknown"),
+                     "created_at": r.created_at, "expires_at": r.expires_at,
+                     "expired": r.expires_at <= now}
+                    for r in rows if r.expires_at > now]
+
+    def revoke(self, session_id: int) -> bool:
+        with session_scope(self._db) as session:
+            result = session.execute(
+                delete(SessionRow).where(SessionRow.id == session_id))
+            return bool(result.rowcount)
+
     def delete_expired(self) -> int:
         with session_scope(self._db) as session:
             result = session.execute(

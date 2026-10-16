@@ -11,7 +11,7 @@ import {
   IconRefresh,
   IconShieldCheck,
 } from '../components/ui/Icons'
-import { DASH, deltaPct, num, pct, secs } from '../utils/format'
+import { deltaPct, num, pct, secs } from '../utils/format'
 import type { MetricSummary } from '../types'
 
 function MttrDistributionPlot({
@@ -149,9 +149,8 @@ function MttrDistributionPlot({
           <span style={{ width: 14, height: 0, borderTop: '2px dashed var(--warning-strong)' }} />
           <span className="text-muted">Target 4.0s</span>
         </span>
-        <span className="con-row" style={{ gap: 6 }}>
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--brand)', opacity: 0.8 }} />
-          <span className="text-muted"><b>Baseline:</b> Failed to recover (unrecovered)</span>
+        <span className="text-muted" style={{ fontSize: 12 }}>
+          Per-record medians come from the <b>Reflex</b> agent only
         </span>
       </div>
     </div>
@@ -261,7 +260,7 @@ export function ResultsPage() {
           value={num(heal.tokens_total)}
           hint={
             <span>
-              Baseline: {num(base.tokens_total)} tokens ({base.tokens_total ? '100% saved' : '0 tokens'})
+              Baseline: {num(base.tokens_total)} tokens
             </span>
           }
           icon={<IconBarChart size={18} />}
@@ -273,7 +272,7 @@ export function ResultsPage() {
           hint={
             <span className="con-row" style={{ gap: 4 }}>
               <IconShieldCheck size={13} style={{ color: 'var(--success-strong)' }} />
-              <span>0 wrong patches applied</span>
+              <span>{num(heal.wrong_patches)} wrong patches applied</span>
             </span>
           }
           icon={<IconShieldCheck size={18} />}
@@ -332,37 +331,45 @@ export function ResultsPage() {
                 metric="Wrong patches"
                 base={num(base.wrong_patches)}
                 heal={num(heal.wrong_patches)}
-                delta="0"
+                delta={String(Math.max(0, (base.wrong_patches ?? 0) - (heal.wrong_patches ?? 0)))}
               />
               <TableRow
                 metric="Median recovery time"
                 base={base.mttr_median !== null ? secs(base.mttr_median) : <span style={{ color: 'var(--brand-text, #e08073)' }}>Failed (no recovery)</span>}
                 heal={secs(heal.mttr_median)}
-                delta={base.mttr_median !== null ? secs(heal.mttr_median! - base.mttr_median) : <span style={{ color: 'var(--success-strong)' }}>Recovered (&lt;4.0s)</span>}
+                delta={base.mttr_median != null ? secs((heal.mttr_median ?? 0) - base.mttr_median) : '—'}
               />
               <TableRow
                 metric="p95 recovery time"
                 base={base.mttr_p95 !== null ? secs(base.mttr_p95) : <span style={{ color: 'var(--brand-text, #e08073)' }}>Failed (no recovery)</span>}
                 heal={secs(heal.mttr_p95)}
-                delta={base.mttr_p95 !== null ? secs(heal.mttr_p95! - base.mttr_p95) : <span style={{ color: 'var(--success-strong)' }}>Recovered (&lt;4.0s)</span>}
+                delta={base.mttr_p95 != null ? secs((heal.mttr_p95 ?? 0) - base.mttr_p95) : '—'}
               />
               <TableRow
                 metric="Total tokens used"
                 base={num(base.tokens_total)}
                 heal={num(heal.tokens_total)}
-                delta={base.tokens_total ? <span style={{ color: 'var(--success-strong)' }}>-{num(base.tokens_total)} (100% saved)</span> : '0'}
+                delta={
+                  base.tokens_total
+                    ? String(Math.max(0, (base.tokens_total ?? 0) - (heal.tokens_total ?? 0)))
+                    : '0'
+                }
               />
               <TableRow
                 metric="Schema attempts before stop"
                 base={num(base.schema_attempts)}
                 heal={num(heal.schema_attempts)}
-                delta={base.schema_attempts ? <span style={{ color: 'var(--success-strong)' }}>-{num(base.schema_attempts - (heal.schema_attempts ?? 0))} attempts</span> : '0'}
+                delta={
+                  base.schema_attempts
+                    ? String(Math.max(0, (base.schema_attempts ?? 0) - (heal.schema_attempts ?? 0)))
+                    : '0'
+                }
               />
               <TableRow
                 metric="Unrecovered failures"
                 base={num(base.failures)}
                 heal={num(heal.failures)}
-                delta={base.failures ? <span style={{ color: 'var(--success-strong)' }}>-{num(base.failures)} (-100%)</span> : '0'}
+                delta={String(Math.max(0, (base.failures ?? 0) - (heal.failures ?? 0)))}
               />
             </tbody>
           </table>
@@ -463,7 +470,7 @@ export function ResultsPage() {
         title="Recovery method"
         actions={
           <span className="text-muted" style={{ fontSize: 12 }}>
-            Rule-based repair vs model-assisted repair
+            Repair path as recorded on each entry
           </span>
         }
       >

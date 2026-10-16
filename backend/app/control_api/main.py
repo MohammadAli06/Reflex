@@ -5,6 +5,7 @@ holds the admin key, the Gemini key or header credentials.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ from ..db import (
     init_db,
 )
 from ..healing.events import Redactor
+from ..mock_api.signing import fingerprint
 from ..mock_api.mutations import list_mutations
 from ..runner.cases import list_cases
 from ..runner.harness import Harness
@@ -34,7 +36,7 @@ from ..runner.metrics import compute_metrics
 from ..runner.records import RunRecord
 from ..runner.run_suite import load_records
 from ..schema_utils import sample_instance
-from .models import LoginRequest, MutateRequest, RunRequest
+from .models import LoginRequest, MutateRequest, RunRequest, SDKCallRequest
 from .run_manager import BusyError, RunManager
 from .scenarios import list_scenarios, run_scenario
 from .sse import stream_events
@@ -52,10 +54,11 @@ def _initial_tool_dicts() -> dict[str, dict[str, Any]]:
 def create_app(settings: Settings | None = None, mock_client: httpx.Client | None = None) -> FastAPI:
     settings = settings or get_settings()
     mock = mock_client or httpx.Client(base_url=settings.mock_api_url, timeout=5.0)
+    db_error: str | None = None
     try:
         init_db(settings.database_url)
-    except Exception:
-        pass
+    except Exception as exc:  # surfaced in /api/status and /api/security/status
+        db_error = f"{type(exc).__name__}: {exc}"
     audit_repo = AuditRepo(settings.database_url)
     run_repo = RunRepo(settings.database_url)
     record_repo = RunRecordRepo(settings.database_url)
@@ -66,8 +69,8 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
     session_repo = SessionRepo(settings.database_url)
     try:
         user_repo.ensure_user(settings.admin_username, settings.admin_password)
-    except Exception:
-        pass
+    except Exception as exc:
+        db_error = db_error or f"{type(exc).__name__}: {exc}"
     audit = AuditLog(settings.audit_log_path, redactor=Redactor(
         [s.value for s in settings.header_secrets.values()]
     ), audit_repo=audit_repo)
@@ -77,6 +80,11 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         "event": event_repo, "revision": revision_repo,
         "snapshot": snapshot_repo, "user": user_repo, "session": session_repo,
     }
+    app.state.provenance = {
+        "ok": None, "verified_at": None, "version": None, "sha256": None,
+        "signature_verified": False, "key_fingerprint": "", "error": None,
+    }
+    app.state.db_error = db_error
 
     allowed_origins = sorted({settings.frontend_origin, *ALLOWED_ORIGINS_LOCAL})
     app.add_middleware(
@@ -99,9 +107,46 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         except Exception:
             pass
 
+    def record_provenance(verified) -> None:
+        """Remember the last schema we authenticated, for the security page."""
+        app.state.provenance = {
+            "ok": True,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "version": verified.version,
+            "sha256": verified.sha256,
+            "signature_verified": bool(getattr(verified, "signature_verified", False)),
+            "key_fingerprint": getattr(verified, "key_fingerprint", ""),
+            "error": None,
+        }
+
+    def record_provenance_failure(exc: Exception) -> None:
+        """A failed provenance check must be visible, not just absent."""
+        app.state.provenance = {
+            "ok": False,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "version": None,
+            "sha256": None,
+            "signature_verified": False,
+            "key_fingerprint": "",
+            "error": str(exc),
+        }
+
+    def resolved_public_key() -> str:
+        """The pinned key, or the mock's own key when running unpinned (dev)."""
+        if settings.pinned_schema_public_key:
+            return settings.pinned_schema_public_key
+        try:
+            catalog = mock.get("/admin/catalog", headers=admin_headers(), timeout=3.0).json()
+            return str(catalog.get("schema_public_key", ""))
+        except Exception:
+            return ""
+
     def new_harness() -> Harness:
         return Harness(settings, client=mock, audit=audit,
-                       revision_sink=record_revision, snapshot_sink=record_snapshot)
+                       revision_sink=record_revision, snapshot_sink=record_snapshot,
+                       provenance_sink=record_provenance,
+                       provenance_error_sink=record_provenance_failure,
+                       mock_public_key=resolved_public_key())
 
     try:
         revision_repo.seed_initial(_initial_tool_dicts())
@@ -182,6 +227,16 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
             "llm_configured": settings.llm_configured,
             "busy": run_manager.busy,
             "last_run": latest.summary() if latest else None,
+            # Repair policy: safe, non-secret values the settings page reports.
+            "llm_model": settings.llm_model,
+            "llm_thinking_level": settings.llm_thinking_level,
+            "llm_repair_enabled": settings.llm_repair_enabled,
+            "max_schema_attempts": settings.max_schema_attempts,
+            "max_infra_retries": settings.max_infra_retries,
+            "schema_signing_enabled": settings.schema_signing_enabled,
+            "schema_key_pinned": bool(settings.pinned_schema_public_key),
+            "spec_watch_interval_s": settings.spec_watch_interval_s,
+            "persistence_error": app.state.db_error,
         }
 
     @app.get("/api/schema")
@@ -298,6 +353,163 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
     async def scenarios():
         return {"scenarios": list_scenarios()}
 
+    # --- real-world benchmark --------------------------------------------
+    @app.get("/api/realworld/cases")
+    async def realworld_cases():
+        from ..realworld.case_builder import load_rows
+
+        rows = load_rows()
+        try:
+            stored = record_repo.list_all()
+        except Exception:
+            stored = []
+        records = [RunRecord.from_dict(d) for d in stored]
+        for row in rows:
+            case_id = str(row.get("id", ""))
+            baseline = next((r for r in reversed(records)
+                             if r.case_id == case_id and r.agent == "baseline"), None)
+            reflex = next((r for r in reversed(records)
+                           if r.case_id == case_id and r.agent == "healing"), None)
+            row["baseline_outcome"] = baseline.outcome if baseline else None
+            row["reflex_outcome"] = reflex.outcome if reflex else None
+            row["reflex_correct"] = reflex.correct if reflex else None
+            row["server_payload_ok"] = reflex.server_payload_ok if reflex else None
+            row["run_id"] = reflex.run_id if reflex else None
+        reviewed = [r for r in rows if r.get("reviewed")]
+        evaluated = [r for r in rows if r.get("reflex_outcome")]
+        return {
+            "cases": rows,
+            "summary": {
+                "registered": len(rows),
+                "reviewed": len(reviewed),
+                "evaluated": len(evaluated),
+                "recovered": sum(1 for r in evaluated
+                                 if r.get("reflex_outcome") == "recovered"
+                                 and r.get("reflex_correct") is not False),
+                "correct_refusals": sum(1 for r in evaluated
+                                        if r.get("reflex_outcome") == "refused"
+                                        and r.get("label") == "refuse_expected"),
+                "wrong_patches": sum(1 for r in evaluated
+                                     if r.get("reflex_outcome") == "recovered"
+                                     and r.get("reflex_correct") is False),
+                "failed": sum(1 for r in evaluated
+                              if r.get("reflex_outcome") == "failed"),
+            },
+        }
+
+    @app.post("/api/realworld/build")
+    async def realworld_build():
+        """Propose draft case rows from the vendored spec pairs (unreviewed)."""
+        from ..realworld.case_builder import build_draft, load_spec, save_rows
+        from ..realworld.case_builder import load_rows as _rows
+
+        drafts = []
+        for api, old_ref, new_ref, operation, args in (
+            ("github", "old", "new", "POST /repos/{owner}/{repo}/issues",
+             {"owner": "acme", "repo": "widgets", "title": "Draft from builder"}),
+        ):
+            try:
+                load_spec(api, old_ref)
+                load_spec(api, new_ref)
+            except FileNotFoundError:
+                continue
+            drafts.append(build_draft(api, operation, old_ref, new_ref, args))
+        existing = _rows()
+        known = {row.get("id") for row in existing}
+        merged = existing + [d for d in drafts if d["id"] not in known]
+        try:
+            save_rows(merged)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"could not write cases.yaml: {exc}")
+        return {"drafts": drafts, "total": len(merged), "reviewed": sum(
+            1 for row in merged if row.get("reviewed"))}
+
+    # --- evaluation -------------------------------------------------------
+    @app.get("/api/evaluation/config")
+    async def evaluation_config():
+        from ..mock_api.active_schema import ERROR_STYLES
+        from ..runner.fuzz import FUZZABLE, PROFILES
+
+        real = []
+        try:
+            from ..realworld.case_builder import reviewed_cases
+
+            real = [c.id for c in reviewed_cases()]
+        except Exception:
+            pass
+        return {
+            "splits": ["tuning", "held_out", "fuzz"],
+            "error_styles": sorted(ERROR_STYLES),
+            "fuzzable_mutations": sorted(FUZZABLE),
+            "refuse_type_mutations": sorted(m for m, p in PROFILES.items() if not p.recoverable),
+            "reviewed_real_cases": real,
+        }
+
+    # --- security ---------------------------------------------------------
+    @app.get("/api/security/status")
+    async def security_status():
+        try:
+            ok, broken_id = audit.verify_chain()
+            checked = audit_repo.count()
+        except Exception as exc:
+            ok, broken_id, checked = None, None, 0
+            app.state.provenance = {**app.state.provenance, "error": str(exc)}
+        key = resolved_public_key()
+        provenance = dict(app.state.provenance)
+        provenance["key_configured"] = bool(key)
+        provenance["key_pinned_in_settings"] = bool(settings.pinned_schema_public_key)
+        provenance["fingerprint"] = provenance.get("key_fingerprint") or (
+            fingerprint(key) if key else "")
+        return {
+            "chain": {"ok": ok, "checked": checked, "first_broken_id": broken_id},
+            "provenance": provenance,
+            "signing_enabled": settings.schema_signing_enabled,
+            "persistence_error": app.state.db_error,
+        }
+
+    @app.post("/api/security/tamper")
+    async def security_tamper(payload: dict | None = None):
+        """Controlled demo of the provenance gate. Mock-only, reverts afterwards.
+
+        Delegates to the ``tampered_schema`` scenario so the route and the Safety
+        page exercise one implementation, including the schema drift that forces
+        a fetch in the first place.
+        """
+        if not settings.schema_signing_enabled:
+            raise HTTPException(
+                status_code=409,
+                detail="schema signing is disabled; the tamper demo cannot show a refusal",
+            )
+        try:
+            result = run_scenario(new_harness(), "tampered_schema")
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"tamper demo failed: {exc}")
+        return {
+            "tamper": {"tampered": result.get("outcome") == "refused"},
+            "heal_attempt": {"outcome": result.get("outcome"),
+                             "reason_code": result.get("reason_code")},
+            "scenario": result,
+        }
+
+    @app.get("/api/security/sessions")
+    async def security_sessions(request: Request):
+        if _current_user(request) is None:
+            raise HTTPException(status_code=401, detail="not authenticated")
+        try:
+            return {"sessions": session_repo.list_active()}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    @app.post("/api/security/sessions/{session_id}/revoke")
+    async def security_revoke_session(session_id: int, request: Request):
+        user = _current_user(request)
+        if user is None:
+            raise HTTPException(status_code=401, detail="not authenticated")
+        removed = session_repo.revoke(session_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail="session not found")
+        return {"revoked": session_id}
+
     # --- auth -------------------------------------------------------------
     def _current_user(request: Request) -> dict[str, Any] | None:
         token = request.cookies.get(SESSION_COOKIE)
@@ -352,6 +564,35 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
             return {"tools": {n: revision_repo.history(n) for n in names}}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
+
+    # --- public SDK adapter ---------------------------------------------
+    @app.get("/api/sdk/tools")
+    async def sdk_tools():
+        """Discover engine-owned tools; SDK clients cannot mutate definitions."""
+        from ..registry.tools import initial_definitions
+        return {"tools": [definition.to_dict() for definition in initial_definitions().values()]}
+
+    @app.post("/api/sdk/call")
+    async def sdk_call(payload: SDKCallRequest):
+        try:
+            state, result = run_manager.execute_sdk(payload.tool, payload.args)
+        except BusyError:
+            raise HTTPException(status_code=409, detail="a run is already in progress")
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"unknown tool: {payload.tool}")
+        except Exception as exc:
+            # Do not echo target errors or request values through the adapter.
+            raise HTTPException(status_code=502, detail="SDK execution could not complete") from exc
+        return {
+            "run_id": state.run_id,
+            "outcome": result.outcome,
+            "healed": result.schema_attempts > 0,
+            "data": result.response_data,
+            "reason_code": result.reason_code,
+            "error": result.error_text or None,
+            "attempts": result.attempts,
+            "schema_attempts": result.schema_attempts,
+        }
 
     @app.post("/api/scenarios/{scenario_id}/run")
     async def run_scenario_route(scenario_id: str):

@@ -10,10 +10,12 @@ export function DataTable<T>({
   columns,
   rows,
   emptyMessage = 'No data',
+  rowClassName,
 }: {
   columns: Column<T>[]
   rows: T[]
   emptyMessage?: string
+  rowClassName?: (row: T) => string
 }) {
   if (rows.length === 0) {
     return <div className="state state-empty">{emptyMessage}</div>
@@ -30,7 +32,7 @@ export function DataTable<T>({
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={index}>
+            <tr key={index} className={rowClassName?.(row)}>
               {columns.map((column) => (
                 <td key={column.key}>
                   {column.render ? column.render(row) : String((row as Record<string, unknown>)[column.key] ?? '')}

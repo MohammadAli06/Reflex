@@ -2,13 +2,18 @@ import type {
   AuditEntry,
   CaseInfo,
   ConsistencyResult,
+  EvaluationConfig,
   MetricsResponse,
   MutationInfo,
+  RealWorldResponse,
   RunSummary,
   ScenarioInfo,
   ScenarioResult,
   SchemaResponse,
+  SecurityStatus,
+  SessionInfo,
   StatusResponse,
+  TamperResult,
   ErrorStyle,
 } from '../types'
 
@@ -25,6 +30,7 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })
@@ -50,6 +56,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login: (username: string, password: string) =>
+    request<{ username: string }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  logout: () => request<{ status: string }>('/logout', { method: 'POST' }),
+  me: () => request<{ username: string }>('/me'),
   status: () => request<StatusResponse>('/status'),
   schema: () => request<SchemaResponse>('/schema'),
   mutations: () => request<{ mutations: MutationInfo[] }>('/mutations'),
@@ -77,4 +87,17 @@ export const api = {
   scenarios: () => request<{ scenarios: ScenarioInfo[] }>('/scenarios'),
   runScenario: (scenarioId: string) =>
     request<ScenarioResult>(`/scenarios/${scenarioId}/run`, { method: 'POST' }),
+  realWorldCases: () => request<RealWorldResponse>('/realworld/cases'),
+  buildRealWorldCases: () => request<{ drafts: unknown[]; total: number; reviewed: number }>(
+    '/realworld/build', { method: 'POST' }),
+  evaluationConfig: () => request<EvaluationConfig>('/evaluation/config'),
+  securityStatus: () => request<SecurityStatus>('/security/status'),
+  tamperSchema: () => request<TamperResult>('/security/tamper', { method: 'POST' }),
+  revertTamper: () => request<{ tampered: boolean }>('/security/tamper', {
+    method: 'POST',
+    body: JSON.stringify({ revert: true }),
+  }),
+  sessions: () => request<{ sessions: SessionInfo[] }>('/security/sessions'),
+  revokeSession: (sessionId: number) =>
+    request<{ revoked: number }>(`/security/sessions/${sessionId}/revoke`, { method: 'POST' }),
 }

@@ -81,6 +81,10 @@ class Settings:
     database_url: str
     admin_username: str
     admin_password: str
+    schema_signing_enabled: bool
+    pinned_schema_public_key: str
+    spec_watch_interval_s: int
+    llm_repair_enabled: bool
     header_secrets: dict[str, HeaderSecret] = field(default_factory=dict)
 
     # ---- safety helpers -------------------------------------------------
@@ -109,10 +113,30 @@ class Settings:
             "llm_thinking_level": self.llm_thinking_level,
             "llm_configured": self.llm_configured,
             "llm_fallback_enabled": self.llm_fallback_enabled,
+            "llm_repair_enabled": self.llm_repair_enabled,
+            "schema_signing_enabled": self.schema_signing_enabled,
+            "schema_key_pinned": bool(self.pinned_schema_public_key),
+            "spec_watch_interval_s": self.spec_watch_interval_s,
             "max_schema_attempts": self.max_schema_attempts,
             "max_infra_retries": self.max_infra_retries,
             "configured_header_secrets": sorted(self.header_secrets.keys()),
         }
+
+
+def _resolve_database_url(raw: str) -> str:
+    """Rebase a relative SQLite path onto the repo root.
+
+    SQLAlchemy resolves ``sqlite:///relative`` against the process working
+    directory, so the same setting would silently point at a different file (or
+    fail to open) depending on where the command was run from.
+    """
+    prefix = "sqlite:///"
+    if not raw.startswith(prefix):
+        return raw
+    path = raw[len(prefix):]
+    if not path or path == ":memory:" or path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+        return raw
+    return f"{prefix}{(BASE_DIR / path).as_posix()}"
 
 
 def _collect_header_secrets(env: dict[str, str]) -> dict[str, HeaderSecret]:
@@ -153,9 +177,9 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
 
     data_dir = _path("DATA_DIR", "data")
     data_dir.mkdir(parents=True, exist_ok=True)
-    database_url = (env.get("DATABASE_URL") or "").strip()
-    if not database_url:
-        database_url = f"sqlite:///{(data_dir / 'reflex.db').as_posix()}"
+    database_url = _resolve_database_url(
+        (env.get("DATABASE_URL") or "").strip() or f"sqlite:///{(data_dir / 'reflex.db').as_posix()}"
+    )
 
     return Settings(
         google_api_key=(env.get("GOOGLE_API_KEY") or "").strip(),
@@ -173,6 +197,10 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         database_url=database_url,
         admin_username=(env.get("ADMIN_USER") or "operator").strip(),
         admin_password=(env.get("ADMIN_PASS") or "reflex2026").strip(),
+        schema_signing_enabled=_as_bool(env.get("SCHEMA_SIGNING_ENABLED"), True),
+        pinned_schema_public_key=(env.get("SCHEMA_PUBLIC_KEY") or "").strip(),
+        spec_watch_interval_s=_as_int(env.get("SPEC_WATCH_INTERVAL_S"), 5),
+        llm_repair_enabled=_as_bool(env.get("LLM_REPAIR_ENABLED"), False),
         header_secrets=_collect_header_secrets(env),
     )
 

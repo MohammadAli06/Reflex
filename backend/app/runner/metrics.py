@@ -1,9 +1,28 @@
-"""Fixed metric formulas (PRD §9). Empty data -> ``available: false``."""
+"""Fixed metric formulas (PRD §9). Empty data -> ``available: false``.
+
+Proportions (ZTAR, correct-refusal rate) carry a Wilson 95% score interval so a
+small sample is never read as a precise rate.
+"""
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
 
 from .records import RunRecord
+
+Z_95 = 1.959963984540054
+
+
+def _wilson_interval(successes: int, total: int, z: float = Z_95) -> dict[str, float] | None:
+    """Wilson score interval for a binomial proportion. ``None`` when undefined."""
+    if total <= 0:
+        return None
+    phat = successes / total
+    denominator = 1 + z * z / total
+    centre = (phat + z * z / (2 * total)) / denominator
+    margin = (z * math.sqrt(phat * (1 - phat) / total + z * z / (4 * total * total))
+              / denominator)
+    return {"low": max(0.0, centre - margin), "high": min(1.0, centre + margin)}
 
 
 def _median(values: list[float]) -> float | None:
@@ -52,6 +71,10 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
     recovered = [r for r in recoverable if r.outcome == "recovered" and r.correct is not False]
     ztar = (len(recovered) / len(recoverable)) if recoverable else None
 
+    refusal_expected = [r for r in records if r.expected_outcome == "refused"]
+    correct_refusals = sum(1 for r in records if _is_correct_refusal(r))
+    refusal_rate = (correct_refusals / len(refusal_expected)) if refusal_expected else None
+
     mttrs = [r.t_recovery - r.t_break for r in recovered
              if r.t_break is not None and r.t_recovery is not None]
     t_heal = sum(r.tokens_heal for r in records if r.agent == "healing")
@@ -62,9 +85,12 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
         "available": True,
         "n": len(records),
         "ztar": ztar,
+        "ztar_ci": _wilson_interval(len(recovered), len(recoverable)),
         "recovered": len(recovered),
         "recoverable": len(recoverable),
-        "correct_refusals": sum(1 for r in records if _is_correct_refusal(r)),
+        "correct_refusals": correct_refusals,
+        "correct_refusal_rate": refusal_rate,
+        "correct_refusal_ci": _wilson_interval(correct_refusals, len(refusal_expected)),
         "wrong_patches": sum(1 for r in records if _is_wrong_patch(r)),
         "failures": sum(1 for r in records if r.outcome == "failed"),
         "not_drift_reported": sum(1 for r in records if r.outcome == "not_drift_reported"),
@@ -104,6 +130,10 @@ def compute_metrics(records: list[RunRecord]) -> dict[str, Any]:
             "by_split": {
                 split: summarize(group)
                 for split, group in _group(agent_records, lambda r: r.split).items()
+            },
+            "by_source": {
+                source: summarize(group)
+                for source, group in _group(agent_records, lambda r: r.source).items()
             },
         }
     return result

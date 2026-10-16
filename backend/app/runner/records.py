@@ -33,6 +33,8 @@ class RunRecord:
     settings: dict[str, Any] = field(default_factory=dict)
     reason_code: str | None = None
     expected_reason: str | None = None
+    source: str = "synthetic"  # synthetic | real | fuzz
+    seed: int | None = None
 
     @property
     def mttr(self) -> float | None:

@@ -120,6 +120,50 @@ class RunManager:
         thread.start()
         return state
 
+    def execute_sdk(self, tool: str, args: dict[str, Any]) -> tuple[RunState, Any]:
+        """Execute one SDK call and persist its real trace in the normal stores."""
+        # Reject before allocating a run: the SDK cannot introduce definitions
+        # outside the engine-owned registry.
+        from ..registry.tools import initial_definitions
+        if tool not in initial_definitions():
+            raise KeyError(tool)
+        with self._lock:
+            if self.busy:
+                raise BusyError("a run is already in progress")
+            run_id = uuid.uuid4().hex[:12]
+            state = RunState(run_id=run_id, case_ids=[f"sdk:{tool}"], repeats=1)
+            self._runs[run_id] = state
+            self._current = run_id
+        if self._run_repo is not None:
+            self._run_repo.create(run_id, state.case_ids, 1)
+        try:
+            harness = self._harness_factory()
+            if hasattr(harness, "_run_id"):
+                harness._run_id = run_id
+            harness.on_event(lambda event: self._on_event(state, event))
+            result = harness.run_healing_tool(tool, args, run_id)
+            record = RunRecord(
+                run_id=run_id, case_id=f"sdk:{tool}", agent="healing",
+                framework="sdk", attempts=result.attempts, t_break=result.t_break,
+                t_recovery=result.t_recovery, outcome=result.outcome,
+                healing_path=result.healing_path, tokens_heal=result.tokens_total,
+                tokens_total=result.tokens_total, schema_attempts=result.schema_attempts,
+                infra_retries=result.infra_retries, model=result.model,
+                reason_code=result.reason_code, source="sdk",
+            )
+            self._on_record(state, record)
+            self._flush_records(state, 0)
+            self._flush_events(state, force=True)
+            state.status = "finished"
+            return state, result
+        except Exception as exc:
+            state.status, state.error = "error", str(exc)
+            raise
+        finally:
+            state.finished_at = _now()
+            if self._run_repo is not None:
+                self._run_repo.set_finished(state.run_id, state.status, state.finished_at, state.error)
+
     def _execute(self, state: RunState) -> None:
         harness = self._harness_factory()
         if hasattr(harness, "_run_id"):

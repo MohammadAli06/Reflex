@@ -28,6 +28,9 @@ class HealingAgent:
         audit: AuditLog,
         settings: Settings,
         snapshot_sink=None,
+        provenance_sink=None,
+        provenance_error_sink=None,
+        mock_public_key: str = "",
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -36,6 +39,9 @@ class HealingAgent:
         self._audit = audit
         self._settings = settings
         self._snapshot_sink = snapshot_sink
+        self._provenance_sink = provenance_sink
+        self._provenance_error_sink = provenance_error_sink
+        self._mock_public_key = mock_public_key
 
     def run(self, task: Task, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
         emitter = emitter or EventEmitter(run_id, "healing")
@@ -46,6 +52,9 @@ class HealingAgent:
             self._registry, self._executor, self._secrets, self._schema_client,
             self._audit, self._settings, emitter,
             snapshot_sink=self._snapshot_sink,
+            provenance_sink=self._provenance_sink,
+            provenance_error_sink=self._provenance_error_sink,
+            mock_public_key=self._mock_public_key,
         )
         outcome = healer.run(task.tool, task.args, case_id=task.id, dry_run=task.write)
 

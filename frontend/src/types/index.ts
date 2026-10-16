@@ -8,6 +8,14 @@ export interface StatusResponse {
   llm_configured: boolean
   busy: boolean
   last_run: RunSummary | null
+  llm_model?: string
+  llm_thinking_level?: string
+  llm_repair_enabled?: boolean
+  max_schema_attempts?: number
+  max_infra_retries?: number
+  schema_signing_enabled?: boolean
+  schema_key_pinned?: boolean
+  spec_watch_interval_s?: number
 }
 
 export interface SchemaResponse {
@@ -37,6 +45,11 @@ export interface CaseInfo {
   error_style: ErrorStyle
   expected_reason: string | null
   split: string
+  source?: 'synthetic' | 'real' | 'fuzz'
+  api?: string | null
+  operation?: string | null
+  change_kind?: string | null
+  reviewed?: boolean
 }
 
 export interface ScenarioInfo {
@@ -92,6 +105,8 @@ export interface RunRecord {
   settings: Record<string, unknown>
   reason_code: string | null
   expected_reason: string | null
+  source?: string
+  seed?: number | null
 }
 
 export interface RunSummary {
@@ -128,9 +143,12 @@ export interface MetricSummary {
   available: boolean
   n?: number
   ztar?: number | null
+  ztar_ci?: { low: number; high: number } | null
   recovered?: number
   recoverable?: number
   correct_refusals?: number
+  correct_refusal_rate?: number | null
+  correct_refusal_ci?: { low: number; high: number } | null
   wrong_patches?: number
   failures?: number
   not_drift_reported?: number
@@ -149,6 +167,7 @@ export interface AgentMetrics {
   by_error_style: Record<string, MetricSummary>
   by_healing_path: Record<string, MetricSummary>
   by_split: Record<string, MetricSummary>
+  by_source?: Record<string, MetricSummary>
 }
 
 export interface MetricsResponse {
@@ -171,4 +190,84 @@ export interface ScenarioResult {
   response_data: Record<string, unknown> | null
   finished_at: string
   events: TraceEvent[]
+}
+
+export interface RealWorldSummary {
+  registered: number
+  reviewed: number
+  evaluated: number
+  recovered: number
+  correct_refusals: number
+  wrong_patches: number
+  failed: number
+}
+
+export interface RealWorldCase {
+  id: string
+  api: string
+  operation: string
+  old_ref: string
+  new_ref: string
+  change_kind: string
+  label: 'recoverable' | 'refuse_expected' | string
+  expected_reason: string | null
+  reviewed: boolean
+  task_args: Record<string, string>
+  baseline_outcome: string | null
+  reflex_outcome: string | null
+  reflex_correct: boolean | null
+  server_payload_ok: boolean | null
+  run_id: string | null
+}
+
+export interface RealWorldResponse {
+  cases: RealWorldCase[]
+  summary: RealWorldSummary
+}
+
+export interface ChainStatus {
+  ok: boolean | null
+  checked: number
+  first_broken_id: number | null
+}
+
+export interface Provenance {
+  ok: boolean | null
+  verified_at: string | null
+  version: number | null
+  sha256: string | null
+  signature_verified: boolean
+  key_fingerprint: string
+  fingerprint: string
+  key_configured: boolean
+  key_pinned_in_settings: boolean
+  error: string | null
+}
+
+export interface SecurityStatus {
+  chain: ChainStatus
+  provenance: Provenance
+  signing_enabled: boolean
+  persistence_error?: string | null
+}
+
+export interface SessionInfo {
+  id: number
+  username: string
+  created_at: string
+  expires_at: string
+  expired: boolean
+}
+
+export interface TamperResult {
+  tamper: { tampered: boolean; served_version?: number }
+  heal_attempt: { outcome: string; reason_code: string | null }
+}
+
+export interface EvaluationConfig {
+  splits: string[]
+  error_styles: string[]
+  fuzzable_mutations: string[]
+  refuse_type_mutations: string[]
+  reviewed_real_cases: string[]
 }

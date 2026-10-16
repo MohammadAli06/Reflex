@@ -350,6 +350,21 @@
 .con-bad { color: var(--brand-red); }
 .con-muted { color: var(--text-muted); }
 
+/* Grouped nav label */
+.con-nav-section {
+  margin: 14px 0 4px;
+  padding: 0 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.con-nav-section:first-child {
+  margin-top: 0;
+}
+
 /* Grids */
 .con-grid-2 {
   display: grid;

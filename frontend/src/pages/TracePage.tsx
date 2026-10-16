@@ -7,8 +7,10 @@ import { PageHead, Panel } from '../components/console'
 import { EventTimeline } from '../components/EventTimeline'
 import { EmptyState, LoadingState } from '../components/StateViews'
 import { CopyButton } from '../components/ui/CopyButton'
+import { DecisionCard } from '../components/DecisionCard'
 import {
   IconPlay,
+  IconSearch,
 } from '../components/ui/Icons'
 import { DASH, num, relTime } from '../utils/format'
 
@@ -19,10 +21,11 @@ function runTone(status: string): 'ok' | 'bad' | 'warn' | 'mute' {
   return 'mute'
 }
 
-export function TracePage() {
+export function TracePage({ embedded = false }: { embedded?: boolean }) {
   const { runId } = useParams<{ runId: string }>()
   const runs = useApi(() => api.listRuns(), [])
   const [selected, setSelected] = useState<string | undefined>(runId)
+  const [query, setQuery] = useState('')
   const active = runId ?? selected ?? runs.data?.runs[0]?.run_id
   const { events, status } = useRunEvents(active)
 
@@ -36,9 +39,19 @@ export function TracePage() {
       ? `${Math.round((healingRecord.t_recovery - healingRecord.t_break) * 1000)}ms`
       : DASH
 
+  const q = query.trim().toLowerCase()
+  const visibleRuns = q
+    ? (runs.data?.runs.filter((run) =>
+        run.run_id.toLowerCase().includes(q) ||
+        run.case_ids.some((c) => c.toLowerCase().includes(q)) ||
+        (run.records.find((r) => r.agent === 'healing')?.outcome ?? '').includes(q)
+      ) ?? [])
+    : (runs.data?.runs ?? [])
+
   return (
     <div className="con-page">
-      <PageHead
+      {!embedded && (
+        <PageHead
         eyebrow={<span>Every step of a run, in order</span>}
         title="Trace"
         subtitle="Calls, schema diffs, patches, and validation checks for the selected run."
@@ -51,14 +64,40 @@ export function TracePage() {
           </div>
         }
       />
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 24, alignItems: 'start' }}>
         <Panel
           title="Runs"
           actions={
-            <span className="text-muted" style={{ fontSize: 12 }}>
-              {runs.data?.runs.length ?? 0} runs
-            </span>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background: 'var(--bg-subtle)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                padding: '3px 8px',
+              }}
+            >
+              <IconSearch size={13} style={{ color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Filter runs…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Search runs"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                  outline: 'none',
+                  width: 140,
+                }}
+              />
+            </div>
           }
         >
           {runs.data && runs.data.runs.length === 0 ? (
@@ -66,9 +105,11 @@ export function TracePage() {
               message="No runs recorded."
               hint="Execute a benchmark run from Agent Comparison to populate this ledger."
             />
+          ) : visibleRuns.length === 0 ? (
+            <EmptyState message="No runs match this filter." />
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {runs.data?.runs.map((run) => {
+              {visibleRuns.map((run) => {
                 const healing = run.records.find((r) => r.agent === 'healing')
                 const on = run.run_id === active
                 const isRecovered = healing?.outcome === 'recovered'
@@ -176,6 +217,8 @@ export function TracePage() {
               >
                 <EventTimeline events={events} />
               </Panel>
+
+              {activeRun.run_id && <DecisionCard runId={activeRun.run_id} />}
             </>
           ) : (
             <EmptyState

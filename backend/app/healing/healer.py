@@ -33,7 +33,7 @@ from .events import EventEmitter
 from .hypothesize import CandidatePatch, apply_patch_to_definition, hypothesize
 from .response_check import check_response
 from .schema_diff import diff_schemas
-from .schema_fetch import fetch_verified
+from .schema_fetch import UntrustedSchemaError, fetch_verified
 from .secrets import SecretsProvider
 from .validate import validate_patch
 
@@ -93,6 +93,9 @@ class Healer:
         settings: Settings,
         emitter: EventEmitter,
         snapshot_sink=None,
+        provenance_sink=None,
+        provenance_error_sink=None,
+        mock_public_key: str = "",
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -102,6 +105,41 @@ class Healer:
         self._settings = settings
         self._emitter = emitter
         self._snapshot_sink = snapshot_sink
+        self._provenance_sink = provenance_sink
+        self._provenance_error_sink = provenance_error_sink
+        self._mock_public_key = mock_public_key
+
+    def _verified(self) -> "VerifiedSchema":
+        """Fetch the schema with provenance checks applied when enabled.
+
+        Verification is only enforced when a public key is actually resolvable
+        (pinned in settings, or discovered from the mock). With the flag on and
+        no key anywhere, the fetch refuses rather than trusting blindly.
+        """
+        key = self._settings.pinned_schema_public_key or self._mock_public_key
+        return fetch_verified(
+            self._schema_client,
+            pinned_public_key=key,
+            require_signature=self._settings.schema_signing_enabled and bool(key),
+        )
+
+    def _refuse_untrusted(self, outcome: "HealOutcome", definition: ToolDefinition,
+                          exc: Exception) -> None:
+        """A schema we cannot authenticate is never diffed or patched."""
+        self._emitter.emit("refused", reason_code=rc.UNTRUSTED_SCHEMA, detail=str(exc))
+        if self._provenance_error_sink is not None:
+            try:
+                self._provenance_error_sink(exc)
+            except Exception:
+                pass
+        self._record_audit(definition, "refused", rc.UNTRUSTED_SCHEMA,
+                           verified_version=None, verified_hash=None,
+                           old_definition=None, new_definition=None,
+                           evidence=[f"schema provenance check failed: {exc}"],
+                           confidence=0.0, error={"status": None, "body": str(exc)})
+        outcome.outcome, outcome.reason_code = "refused", rc.UNTRUSTED_SCHEMA
+        outcome.definition = definition
+        outcome.error_text = str(exc)
 
     def _record_audit(
         self,
@@ -201,6 +239,9 @@ class Healer:
                 if category is Category.AUTH:
                     # Only a missing required header (with an available credential) is healable.
                     verified = self._fetch_schema(emitter, outcome)
+                    if verified is None:
+                        outcome.t_break = t_break
+                        return outcome
                     diff = self._diff(definition, verified, emitter)
                     if not diff.added_headers:
                         emitter.emit("not_drift", reason_code=rc.AUTH_REJECTED)
@@ -231,6 +272,9 @@ class Healer:
                 outcome.schema_attempts += 1
                 if verified is None:
                     verified = self._fetch_schema(emitter, outcome)
+                    if verified is None:
+                        outcome.t_break = t_break
+                        return outcome
                 if diff is None:
                     diff = self._diff(definition, verified, emitter)
 
@@ -386,10 +430,21 @@ class Healer:
         emitter = self._emitter
         data = extract_response(definition, result.body)
         if data and any(v is None for v in data.values()):
-            verified = fetch_verified(self._schema_client)
+            try:
+                verified = self._verified()
+            except UntrustedSchemaError as exc:
+                self._refuse_untrusted(outcome, definition, exc)
+                outcome.t_break = t_break
+                outcome.final_result = result
+                return outcome
             if self._snapshot_sink is not None:
                 try:
                     self._snapshot_sink(verified)
+                except Exception:
+                    pass
+            if self._provenance_sink is not None:
+                try:
+                    self._provenance_sink(verified)
                 except Exception:
                     pass
             check = check_response(definition, result.body, verified)
@@ -430,14 +485,25 @@ class Healer:
         return outcome
 
     def _fetch_schema(self, emitter: EventEmitter, outcome: HealOutcome):
-        verified = fetch_verified(self._schema_client)
+        try:
+            verified = self._verified()
+        except UntrustedSchemaError as exc:
+            self._refuse_untrusted(outcome, outcome.definition, exc)
+            return None
         if self._snapshot_sink is not None:
             try:
                 self._snapshot_sink(verified)
             except Exception:
                 pass
+        if self._provenance_sink is not None:
+            try:
+                self._provenance_sink(verified)
+            except Exception:
+                pass
         emitter.emit("schema_fetched", version=verified.version, sha256=verified.sha256,
-                     error_style=verified.error_style)
+                     error_style=verified.error_style,
+                     signature_verified=verified.signature_verified,
+                     key_fingerprint=verified.key_fingerprint)
         return verified
 
     def _diff(self, definition: ToolDefinition, verified, emitter: EventEmitter):

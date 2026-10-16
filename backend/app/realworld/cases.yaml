@@ -1,0 +1,23 @@
+# Real-world evaluation cases.
+#
+# Each row is a hand-reviewed breaking change between two vendored revisions of
+# a public OpenAPI document. `reviewed: true` means a human confirmed the
+# expected outcome; only reviewed rows are runnable and count as ground truth.
+#
+# Drafts are proposed by `python -m app.runner.run_suite --build-real` and must
+# be reviewed before the flag is flipped.
+cases:
+  - id: github_issue_field_rename_and_header
+    api: github
+    operation: POST /repos/{owner}/{repo}/issues
+    old_ref: old
+    new_ref: new
+    change_kind: field_renamed+header_added
+    label: recoverable
+    expected_reason: null
+    reviewed: true
+    task_args:
+      owner: acme
+      repo: widgets
+      title: Reflex detects the rename without a restart
+      body: The old contract required `title`; the new one requires `summary`.

@@ -135,6 +135,37 @@ class ActiveSchema:
         self._lock = threading.RLock()
         self._state = state or initial_state()
 
+    @classmethod
+    def from_openapi(cls, spec: dict[str, Any], operation: str) -> "ActiveSchema":
+        """Create an active contract from one JSON-body OpenAPI operation.
+
+        ``operation`` is ``"METHOD /path"``.  Multipart and non-JSON bodies
+        deliberately fail closed: this mock only validates JSON requests.
+        """
+        try:
+            method, endpoint = operation.split(" ", 1)
+            op = spec["paths"][endpoint][method.lower()]
+            media = op["requestBody"]["content"]["application/json"]
+        except (KeyError, ValueError, TypeError) as exc:
+            raise ValueError(f"operation must expose an application/json body: {operation}") from exc
+        schema = copy.deepcopy(media.get("schema", {}))
+        if "$ref" in schema:
+            ref = schema["$ref"]
+            if not ref.startswith("#/components/schemas/"):
+                raise ValueError("only local component references are supported")
+            name = ref.rsplit("/", 1)[-1]
+            try:
+                schema = copy.deepcopy(spec["components"]["schemas"][name])
+            except KeyError as exc:
+                raise ValueError(f"missing component schema {name}") from exc
+        headers = [HeaderRequirement(name=p["name"], format=p.get("schema", {}).get("format"))
+                   for p in op.get("parameters", []) if p.get("in") == "header" and p.get("required")]
+        response = (op.get("responses", {}).get("200", {}).get("content", {})
+                    .get("application/json", {}).get("schema", {"type": "object"}))
+        version = int(spec.get("x-schema-version", 1))
+        return cls(ActiveSchemaState(version=version, request_schemas={endpoint: schema},
+                                     required_headers=headers, response_schemas={endpoint: response}))
+
     def snapshot(self) -> ActiveSchemaState:
         with self._lock:
             return self._state.clone()

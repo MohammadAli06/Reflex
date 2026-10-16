@@ -39,7 +39,15 @@ SCENARIOS: list[dict[str, str]] = [
         "case_id": "not_drift_bad_credential",
         "description": "A rejected credential is not bypassed.",
     },
+    {
+        "id": "tampered_schema",
+        "label": "Refusal: untrusted schema",
+        "case_id": "ps_demo",
+        "description": "A forged schema document fails provenance checks and is never diffed or patched.",
+    },
 ]
+
+_PROVENANCE_SCENARIOS = {"tampered_schema"}
 
 _EXPLANATIONS = {
     "recovered": "Detected the change, applied a validated patch, and completed the task without a restart.",
@@ -54,6 +62,7 @@ _EXPLANATIONS = {
     rc.RETRY_CAP_REACHED: "The retry cap was reached without a safe fix.",
     rc.NO_EVIDENCE: "No relevant schema change explained the error, so it refused.",
     rc.NEEDS_HUMAN_REVIEW: "The change could not be applied safely; a human must review it.",
+    rc.UNTRUSTED_SCHEMA: "The served schema could not be verified against the pinned key, so it was never trusted.",
 }
 
 
@@ -77,6 +86,9 @@ def get_scenario(scenario_id: str) -> dict[str, str]:
 def run_scenario(harness: Harness, scenario_id: str) -> dict[str, Any]:
     scenario = get_scenario(scenario_id)
     case = get_case(scenario["case_id"])
+    if scenario_id in _PROVENANCE_SCENARIOS:
+        return _run_provenance_scenario(harness, scenario, case)
+
     harness.reset()
     if case.fault:
         harness.set_fault(case.fault)
@@ -91,8 +103,40 @@ def run_scenario(harness: Harness, scenario_id: str) -> dict[str, Any]:
     result = harness.run_healing(case.task_id, f"scenario-{scenario_id}", secrets=secrets, emitter=emitter)
     harness.set_fault(None)
 
+    return _scenario_result(scenario, case, result, emitter)
+
+
+def _run_provenance_scenario(harness: Harness, scenario: dict[str, str], case) -> dict[str, Any]:
+    """Drift the schema, then serve a forged document and prove it is refused.
+
+    The drift is what forces a schema fetch in the first place; the forgery is
+    whatever the fetch then returns.
+    """
+    tampered = False
+    try:
+        harness.reset()
+        if case.mutation_id:
+            harness.apply_mutation(case.mutation_id, error_style=case.error_style)
+        response = harness.client.post("/admin/tamper", headers=harness.admin_headers)
+        response.raise_for_status()
+        tampered = True
+        harness.reset_registry()
+        emitter = harness.make_emitter(f"scenario-{scenario['id']}", "healing")
+        result = harness.run_healing(case.task_id, f"scenario-{scenario['id']}",
+                                    secrets=harness.secrets, emitter=emitter)
+    finally:
+        if tampered:
+            try:
+                harness.client.post("/admin/tamper", json={"revert": True},
+                                    headers=harness.admin_headers)
+            except Exception:
+                pass
+    return _scenario_result(scenario, case, result, emitter)
+
+
+def _scenario_result(scenario: dict[str, str], case, result, emitter) -> dict[str, Any]:
     return {
-        "scenario_id": scenario_id,
+        "scenario_id": scenario["id"],
         "label": scenario["label"],
         "case_id": case.id,
         "outcome": result.outcome,

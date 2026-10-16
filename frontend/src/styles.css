@@ -564,6 +564,15 @@ select:focus-visible {
   border-bottom: none;
 }
 
+/* Draft (unreviewed) benchmark case rows are visualized but not run. */
+.data-table tr.row-draft td {
+  opacity: 0.45;
+  font-style: normal;
+}
+.data-table tr.row-draft td b {
+  font-weight: 500;
+}
+
 /* State views */
 .state {
   display: flex;

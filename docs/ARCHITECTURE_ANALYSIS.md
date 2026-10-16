@@ -32,12 +32,12 @@ The system is fully implemented and operational across three local processes: a 
 
 | Layer | Technologies & Libraries | Verified Port / Execution Model |
 |---|---|---|
-| **Frontend UI** | React 18.3.1, TypeScript 5.5, Vite 5.4, React Router DOM 6.30, Vitest 2.1 | Port `5173` (Vite Dev Server, Native Fetch client, EventSource SSE) |
+| **Frontend UI** | React 18.3.1, TypeScript 5.5, Vite 5.4, React Router DOM 6.30, Vitest 2.1 (25 passing tests) | Port `5173` (Vite Dev Server, Native Fetch client, EventSource SSE, ErrorBoundary) |
 | **UI Styling** | Custom CSS Architecture (`tokens.css`, `components.css`, `console.css`, `landing.css`, `login.css`) | Obsidian Dark Theme, CSS Variables, Geist / JetBrains Mono fonts |
-| **Control API** | Python 3.14, FastAPI 0.115, Uvicorn 0.31, Pydantic v2, HTTPX 0.27 | Port `8001` (Async ASGI, Server-Sent Events, Origin Middleware) |
-| **Mock Target API** | Python 3.14, FastAPI 0.115, Uvicorn 0.31, `jsonschema` (Draft 2020-12) | Port `8000` (In-memory `ActiveSchema`, dynamic OpenAPI generation) |
+| **Control API** | Python 3.14, FastAPI 0.115, Uvicorn 0.31, Pydantic v2, HTTPX 0.27 (91 passing tests) | Port `8001` (Async ASGI, Server-Sent Events, Origin Middleware, Session Cookies) |
+| **Mock Target API** | Python 3.14, FastAPI 0.115, Uvicorn 0.31, `jsonschema` (Draft 2020-12), `cryptography` | Port `8000` (In-memory `ActiveSchema`, dynamic OpenAPI generation, Ed25519 schema signing) |
 | **Intelligence** | Deterministic AST Rule Engine + `google-genai` SDK (`gemini-3.8-flash`) | Local heuristics (primary, 0 tokens) + Gemini adapter (configured fallback) |
-| **Persistence / Audit** | Append-only JSONL files (`audit/audit.jsonl`, `results/*.jsonl`) | Canonical JSON serialization, SHA-256 change tracking, thread-safe RLock |
+| **Persistence / Audit** | SQLite + SQLAlchemy 2.0 (`app/db/`) & append-only JSONL files (`audit/audit.jsonl`, `results/`) | 8 relational repos (Runs, Audits, Snapshots, Revisions, Sessions, Users) + SHA-256 hash chains |
 
 ### 2.2 Repository Directory Layout
 

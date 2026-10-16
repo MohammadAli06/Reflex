@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { useApi } from '../hooks/useApi'
 import { PageHead, Panel } from '../components/console'
@@ -68,6 +69,7 @@ function ConfidenceBar({ value }: { value: number }) {
 }
 
 export function AuditPage() {
+  const navigate = useNavigate()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState<string | null>(null)
@@ -210,6 +212,7 @@ export function AuditPage() {
                   <th>Version Change</th>
                   <th>Schema Hash</th>
                   <th>Confidence</th>
+                  <th>Repair Path</th>
                   <th>Reason Code</th>
                   <th style={{ textAlign: 'right' }}>Action</th>
                 </tr>
@@ -218,10 +221,11 @@ export function AuditPage() {
                 {filtered.map((e) => {
                   const isOpen = open === e.ts
                   return (
-                    <>
+                    <Fragment key={e.ts}>
                       <tr
                         key={e.ts}
-                        onClick={() => setOpen(isOpen ? null : e.ts)}
+                        onClick={() => navigate(`/console/runs/${e.run_id}`)}
+                        data-testid={`audit-row-${e.run_id}`}
                         style={{
                           cursor: 'pointer',
                           background: isOpen ? 'var(--surface-tint)' : undefined,
@@ -246,6 +250,15 @@ export function AuditPage() {
                         </td>
                         <td>
                           <ConfidenceBar value={e.confidence} />
+                        </td>
+                        <td>
+                          {e.healing_path ? (
+                            <span className="font-mono" style={{ fontSize: 12 }}>
+                              {e.healing_path === 'llm' ? 'LLM' : 'Rule'}
+                            </span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )}
                         </td>
                         <td>
                           {e.reason_code ? (
@@ -273,14 +286,18 @@ export function AuditPage() {
                       {/* Expandable row for details */}
                       {isOpen && (
                         <tr key={`${e.ts}-details`}>
-                          <td colSpan={9} style={{ padding: '16px 20px', background: 'var(--bg-subtle)' }}>
+                          <td colSpan={10} style={{ padding: '16px 20px', background: 'var(--bg-subtle)' }}>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                               <div className="con-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
                                 <div className="con-row" style={{ gap: 8 }}>
                                   <span className="text-label">Inspection:</span>
                                   <span style={{ fontWeight: 600 }}>{e.tool}</span>
                                   <span className="text-muted font-mono" style={{ fontSize: 12 }}>
-                                    (Run: {e.run_id})
+                                    (Run:{' '}
+                                    <Link to={`/console/runs/${e.run_id}`} className="font-mono">
+                                      {e.run_id}
+                                    </Link>
+                                    )
                                   </span>
                                 </div>
                                 <div className="con-row" style={{ gap: 8 }}>
@@ -342,7 +359,7 @@ export function AuditPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   )
                 })}
               </tbody>

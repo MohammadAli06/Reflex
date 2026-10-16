@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { authenticate, DEMO_PASSWORD, DEMO_USERNAME } from '../auth'
+import { api, ApiError } from '../api/client'
 import { IconEye, IconEyeOff } from '../components/ui/Icons'
 
 export function LoginPage() {
@@ -9,16 +9,15 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!username.trim() || !password) { setError('Enter your username and password to continue.'); return }
-    if (!authenticate(username, password)) { setError('Those credentials were not recognized. Try the demo login below.'); return }
-    navigate('/console', { replace: true })
-  }
-  function fillDemo() {
-    setUsername(DEMO_USERNAME)
-    setPassword(DEMO_PASSWORD)
-    setError('')
+    try {
+      await api.login(username.trim(), password)
+      navigate('/console', { replace: true })
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 401 ? 'Those credentials were not recognized.' : 'Unable to sign in. Try again.')
+    }
   }
   return <main className="login-split">
     <section className="login-form-col" aria-labelledby="login-title">
@@ -46,12 +45,6 @@ export function LoginPage() {
           {error && <p className="login-error" role="alert">{error}</p>}
           <button className="login-submit" type="submit">Sign in</button>
         </form>
-        <p className="login-demo">
-          <span>Demo account:</span>
-          <button type="button" className="login-demo-chip" onClick={fillDemo} title="Fill in the demo credentials">
-            {DEMO_USERNAME} / {DEMO_PASSWORD}
-          </button>
-        </p>
       </div>
     </section>
     <aside className="login-brand-col" aria-hidden="true">
