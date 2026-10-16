@@ -1,10 +1,17 @@
 # Taste
+- Requires scoped, verification-gated agent work: changes confined to a declared directory/layer, presentation-only (never data fetching, state, logic, or API shapes), existing test hooks and handlers preserved, proven by a scoped diff plus passing tests and build, done on a separate branch — never main. Confidence: 0.85
 - Prefers documentation organized into purpose-based subfolders (e.g. problem-statement, specs, plan, reviews, presentation) rather than a flat `docs/` directory. Confidence: 0.6
 - When handing over a design/UI asset (e.g. a Stitch HTML export, usually via a local file path), expects it to be implemented faithfully — same palette, typography, and layout — rather than reinterpreted or approximated from a spec. Confidence: 0.6
-- Insists on no fabricated or unmeasured figures in UI/marketing surfaces; values that have no real data must degrade to a placeholder (e.g. an em dash) and read from live sources instead. Confidence: 0.5
+- Insists on no fabricated or unmeasured figures in UI/marketing surfaces; values that have no real data must degrade to a placeholder (e.g. an em dash) and read from live sources instead. Confidence: 0.8
 - Likes new page styles scoped/namespaced so they don't clobber the existing app's theme (e.g. a separate scoped CSS file with its own token prefix). Confidence: 0.5
 - Optimizes for speed of delivery: wants the change implemented and a build run, then stop — extra verification (dev servers, live route probing, manual browser checks) is seen as too time-consuming. Confidence: 0.75
 - Prefers pnpm for running frontend scripts (e.g. `pnpm build`). Confidence: 0.5
-- When supplying a concrete value (e.g. a literal CSS padding like `60px`), expects it applied verbatim rather than replaced by the agent's own approximation — substituting a different value reads as ignoring the instruction. Confidence: 0.6
+- When supplying a concrete value (e.g. a literal CSS padding like `60px`), expects it applied verbatim rather than replaced by the agent's own approximation — substituting a different value reads as ignoring the instruction. Confidence: 0.75
 - Favors minimal styling on the dark UI: dislikes decorative light chip/background treatments that clash (e.g. the global light `code` background), preferring plain, unstyled elements that "look fine" as-is. Confidence: 0.5
 - Prefers complex technical topics explained in simple plain words with a complete end-to-end flow, including an ordered walkthrough for demoing/explaining multi-page UI to others and where AI/LLM fits in the architecture. Confidence: 0.6
+- Prefers calm, restrained commercial UI (Linear/Stripe-like): hairline borders with spacing-and-type hierarchy instead of boxing everything, no emoji decoration, badges only for true status, sentence-case labels with no all-caps tracking, subtle purposeful motion only. Confidence: 0.85
+- Demands plain, accurate UI copy with no buzzwords or unproven claims; overclaims rewritten into factual one-liners. Confidence: 0.8
+- Expects visual work to start with a shared design-token plus reusable-component foundation (buttons, cards, stats, tabs, tables, steppers, code blocks, empty/skeleton states) with no per-page duplicated styling. Confidence: 0.75
+- Enforces strict semantic color and typography discipline: limited hues per screen (e.g. red = failed, green = healed, amber = refusal, navy = neutral), one UI sans plus monospace strictly for code/payloads/hashes plus one serif display face for titles and big numbers, tabular numerals for metrics. Confidence: 0.75
+- Requires light and dark themes equally polished with WCAG AA contrast and a working persistent toggle, plus visible keyboard focus, prefers-reduced-motion support, and skeleton plus honest empty/error states on every data view. Confidence: 0.7
+- Expects a final report listing files changed, old-to-new copy changes, and verbatim verification outputs (diff, tests, build). Confidence: 0.6

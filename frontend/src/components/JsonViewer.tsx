@@ -1,3 +1,5 @@
+import { CopyButton } from './ui/CopyButton'
+
 const SENSITIVE = ['key', 'token', 'secret', 'authorization', 'password', 'credential']
 const REDACTED = '***redacted***'
 
@@ -16,10 +18,14 @@ function redact(value: unknown, keyName?: string): unknown {
 
 export function JsonViewer({ value, label }: { value: unknown; label?: string }) {
   const safe = redact(value)
+  const jsonString = JSON.stringify(safe, null, 2)
   return (
     <div className="json-viewer">
-      {label && <div className="json-label muted">{label}</div>}
-      <pre>{JSON.stringify(safe, null, 2)}</pre>
+      <div className="con-row" style={{ justifyContent: 'space-between', marginBottom: 8 }}>
+        {label ? <div className="json-label">{label}</div> : <div />}
+        <CopyButton text={jsonString} hideText={true} />
+      </div>
+      <pre>{jsonString}</pre>
     </div>
   )
 }
