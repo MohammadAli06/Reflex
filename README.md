@@ -12,7 +12,9 @@ phases, design and execution plan.
 
 ## Stack
 
-- **Backend:** Python 3.11+, FastAPI, Uvicorn, `jsonschema`, `httpx`, pytest.
+- **Backend:** Python 3.11+, FastAPI, Uvicorn, `jsonschema`, `httpx`, pytest,
+  SQLAlchemy 2.0 + SQLite (Control API persistence; mock API stays in-memory),
+  `bcrypt` (password hashing).
 - **Frontend:** React + Vite + TypeScript, Recharts, Vitest.
 - **LLM:** Gemini via Google AI Studio behind a replaceable `LLMClient`
   (a deterministic fake client is used when no key is configured).

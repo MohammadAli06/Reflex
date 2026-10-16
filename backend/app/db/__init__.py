@@ -1,0 +1,50 @@
+"""SQLite persistence for the Control API (8001). The Mock API stays in-memory."""
+from .engine import get_engine, init_db, session_scope
+from .models import (
+    AuditEntryRow,
+    Base,
+    Run,
+    RunRecordRow,
+    SchemaSnapshot,
+    SessionRow,
+    ToolRevision,
+    TraceEventRow,
+    User,
+)
+from .repos import (
+    AuditRepo,
+    RunRecordRepo,
+    RunRepo,
+    SchemaSnapshotRepo,
+    SessionRepo,
+    ToolRevisionRepo,
+    TraceEventRepo,
+    UserRepo,
+    hash_password,
+    verify_password,
+)
+
+__all__ = [
+    "get_engine",
+    "init_db",
+    "session_scope",
+    "Base",
+    "AuditEntryRow",
+    "Run",
+    "RunRecordRow",
+    "SchemaSnapshot",
+    "SessionRow",
+    "ToolRevision",
+    "TraceEventRow",
+    "User",
+    "AuditRepo",
+    "RunRecordRepo",
+    "RunRepo",
+    "SchemaSnapshotRepo",
+    "SessionRepo",
+    "ToolRevisionRepo",
+    "TraceEventRepo",
+    "UserRepo",
+    "hash_password",
+    "verify_password",
+]

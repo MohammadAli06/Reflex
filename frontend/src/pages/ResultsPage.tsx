@@ -8,6 +8,7 @@ import {
   IconBarChart,
   IconCheck,
   IconInfo,
+  IconRefresh,
   IconShieldCheck,
 } from '../components/ui/Icons'
 import { DASH, deltaPct, num, pct, secs } from '../utils/format'
@@ -133,11 +134,12 @@ function MttrDistributionPlot({
           paddingTop: 8,
           borderTop: '1px solid var(--hairline)',
           fontSize: 12,
+          flexWrap: 'wrap',
         }}
       >
         <span className="con-row" style={{ gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--navy)' }} />
-          <span><b>Baseline</b> median: {secs(median)}</span>
+          <span><b>Reflex</b> median: {secs(median)}</span>
         </span>
         <span className="con-row" style={{ gap: 6 }}>
           <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--success)' }} />
@@ -146,6 +148,10 @@ function MttrDistributionPlot({
         <span className="con-row" style={{ gap: 6 }}>
           <span style={{ width: 14, height: 0, borderTop: '2px dashed var(--warning-strong)' }} />
           <span className="text-muted">Target 4.0s</span>
+        </span>
+        <span className="con-row" style={{ gap: 6 }}>
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--brand)', opacity: 0.8 }} />
+          <span className="text-muted"><b>Baseline:</b> Failed to recover (unrecovered)</span>
         </span>
       </div>
     </div>
@@ -159,9 +165,9 @@ function TableRow({
   delta,
 }: {
   metric: string
-  base: string
-  heal: string
-  delta: string
+  base: string | React.ReactNode
+  heal: string | React.ReactNode
+  delta: string | React.ReactNode
 }) {
   return (
     <tr>
@@ -210,9 +216,20 @@ export function ResultsPage() {
         title="Results"
         subtitle="How Reflex compares against the baseline across every recorded run."
         right={
-          <span className="text-muted" style={{ fontSize: 12 }}>
-            Sample size: n = {num(data.n_records)} runs
-          </span>
+          <div className="con-row" style={{ gap: 12 }}>
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              Sample size: n = {num(data.n_records)} runs
+            </span>
+            <button
+              type="button"
+              className="cbtn cbtn-ghost"
+              onClick={() => metrics.reload()}
+              title="Refresh metrics from recorded runs"
+            >
+              <IconRefresh size={14} />
+              <span>Reload</span>
+            </button>
+          </div>
         }
       />
 
@@ -233,7 +250,7 @@ export function ResultsPage() {
           value={secs(heal.mttr_median)}
           hint={
             <span>
-              Target under 4.0s (p95: {secs(heal.mttr_p95)})
+              Target &lt;4.0s (Baseline: {base.mttr_median !== null ? secs(base.mttr_median) : 'Failed to recover'})
             </span>
           }
           icon={<IconActivity size={18} />}
@@ -244,7 +261,7 @@ export function ResultsPage() {
           value={num(heal.tokens_total)}
           hint={
             <span>
-              Rule-based repairs use 0 tokens
+              Baseline: {num(base.tokens_total)} tokens ({base.tokens_total ? '100% saved' : '0 tokens'})
             </span>
           }
           icon={<IconBarChart size={18} />}
@@ -309,7 +326,7 @@ export function ResultsPage() {
                 metric="Correct refusals"
                 base={num(base.correct_refusals)}
                 heal={num(heal.correct_refusals)}
-                delta={DASH}
+                delta={(heal.correct_refusals ?? 0) > (base.correct_refusals ?? 0) ? `+${(heal.correct_refusals ?? 0) - (base.correct_refusals ?? 0)}` : '0'}
               />
               <TableRow
                 metric="Wrong patches"
@@ -319,33 +336,33 @@ export function ResultsPage() {
               />
               <TableRow
                 metric="Median recovery time"
-                base={secs(base.mttr_median)}
+                base={base.mttr_median !== null ? secs(base.mttr_median) : <span style={{ color: 'var(--brand-text, #e08073)' }}>Failed (no recovery)</span>}
                 heal={secs(heal.mttr_median)}
-                delta={DASH}
+                delta={base.mttr_median !== null ? secs(heal.mttr_median! - base.mttr_median) : <span style={{ color: 'var(--success-strong)' }}>Recovered (&lt;4.0s)</span>}
               />
               <TableRow
                 metric="p95 recovery time"
-                base={secs(base.mttr_p95)}
+                base={base.mttr_p95 !== null ? secs(base.mttr_p95) : <span style={{ color: 'var(--brand-text, #e08073)' }}>Failed (no recovery)</span>}
                 heal={secs(heal.mttr_p95)}
-                delta={DASH}
+                delta={base.mttr_p95 !== null ? secs(heal.mttr_p95! - base.mttr_p95) : <span style={{ color: 'var(--success-strong)' }}>Recovered (&lt;4.0s)</span>}
               />
               <TableRow
                 metric="Total tokens used"
                 base={num(base.tokens_total)}
                 heal={num(heal.tokens_total)}
-                delta={DASH}
+                delta={base.tokens_total ? <span style={{ color: 'var(--success-strong)' }}>-{num(base.tokens_total)} (100% saved)</span> : '0'}
               />
               <TableRow
                 metric="Schema attempts before stop"
                 base={num(base.schema_attempts)}
                 heal={num(heal.schema_attempts)}
-                delta={DASH}
+                delta={base.schema_attempts ? <span style={{ color: 'var(--success-strong)' }}>-{num(base.schema_attempts - (heal.schema_attempts ?? 0))} attempts</span> : '0'}
               />
               <TableRow
                 metric="Unrecovered failures"
                 base={num(base.failures)}
                 heal={num(heal.failures)}
-                delta={DASH}
+                delta={base.failures ? <span style={{ color: 'var(--success-strong)' }}>-{num(base.failures)} (-100%)</span> : '0'}
               />
             </tbody>
           </table>
@@ -390,7 +407,7 @@ export function ResultsPage() {
                     <span style={{ fontWeight: 600, color: 'var(--muted)' }}>
                       Baseline success {basePct}%
                     </span>
-                    <span className="font-mono text-muted">{secs(b?.mttr_median)}</span>
+                    <span className="font-mono text-muted">{b?.mttr_median !== null && b?.mttr_median !== undefined ? secs(b.mttr_median) : 'Failed (0s)'}</span>
                   </div>
                   <div
                     style={{

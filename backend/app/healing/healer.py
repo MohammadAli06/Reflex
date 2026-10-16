@@ -92,6 +92,7 @@ class Healer:
         audit: AuditLog,
         settings: Settings,
         emitter: EventEmitter,
+        snapshot_sink=None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -100,6 +101,7 @@ class Healer:
         self._audit = audit
         self._settings = settings
         self._emitter = emitter
+        self._snapshot_sink = snapshot_sink
 
     def _record_audit(
         self,
@@ -385,6 +387,11 @@ class Healer:
         data = extract_response(definition, result.body)
         if data and any(v is None for v in data.values()):
             verified = fetch_verified(self._schema_client)
+            if self._snapshot_sink is not None:
+                try:
+                    self._snapshot_sink(verified)
+                except Exception:
+                    pass
             check = check_response(definition, result.body, verified)
             emitter.emit("response_check", ok=check.ok, reason_code=check.reason_code,
                          evidence=check.evidence)
@@ -424,6 +431,11 @@ class Healer:
 
     def _fetch_schema(self, emitter: EventEmitter, outcome: HealOutcome):
         verified = fetch_verified(self._schema_client)
+        if self._snapshot_sink is not None:
+            try:
+                self._snapshot_sink(verified)
+            except Exception:
+                pass
         emitter.emit("schema_fetched", version=verified.version, sha256=verified.sha256,
                      error_style=verified.error_style)
         return verified

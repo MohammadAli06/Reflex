@@ -25,6 +25,7 @@ def harness(tmp_path):
             "HEADER_X_TENANT_TOKEN": TENANT_TOKEN,
             "AUDIT_LOG_PATH": str(tmp_path / "audit.jsonl"),
             "RESULTS_DIR": str(tmp_path / "results"),
+            "DATABASE_URL": f"sqlite:///{(tmp_path / 'reflex_test.db').as_posix()}",
         }
     )
     app = create_app(settings)

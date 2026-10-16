@@ -21,6 +21,7 @@ Project documentation, grouped by purpose.
 - [Execution plan](./plan/execution_plan.md)
 - [Solution alignment review](./reviews/solution_alignment_review.md)
 - [Presentation content](./presentation/ppt_solution_content.md)
+- [Full-Stack Architecture & Codebase Analysis](./ARCHITECTURE_ANALYSIS.md)
 
 Source-of-truth order: the official PS wins; then `specs/PRD.md`, then
 `specs/Architecture.md`, `specs/rules.md`, `specs/design.md`.

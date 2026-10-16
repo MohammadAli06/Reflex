@@ -16,12 +16,14 @@ class StaleRevisionError(RuntimeError):
 
 
 class ToolRegistry:
-    def __init__(self, definitions: dict[str, ToolDefinition] | None = None) -> None:
+    def __init__(self, definitions: dict[str, ToolDefinition] | None = None,
+                 on_commit=None) -> None:
         self._lock = threading.RLock()
         self._current: dict[str, ToolDefinition] = {
             name: definition.copy_with() for name, definition in (definitions or {}).items()
         }
         self._previous: dict[str, ToolDefinition] = {}
+        self.on_commit = on_commit
 
     def list_names(self) -> list[str]:
         with self._lock:
@@ -53,6 +55,8 @@ class ToolRegistry:
             applied = new_definition.copy_with(revision=current.revision + 1)
             self._previous[name] = current.copy_with()
             self._current[name] = applied
+            if self.on_commit is not None:
+                self.on_commit(name, applied)
             return applied.copy_with()
 
     def rollback(self, name: str, expected_revision: int) -> ToolDefinition:
@@ -71,6 +75,8 @@ class ToolRegistry:
             restored = previous.copy_with(revision=current.revision + 1)
             self._previous[name] = current.copy_with()
             self._current[name] = restored
+            if self.on_commit is not None:
+                self.on_commit(name, restored)
             return restored.copy_with()
 
     def snapshot(self) -> dict[str, dict]:

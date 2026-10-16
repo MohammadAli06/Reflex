@@ -248,6 +248,7 @@ export function SchemaPage() {
                   border: 'none',
                   borderTop: i === 0 ? 'none' : '1px solid var(--hairline)',
                   background: isSelected ? 'var(--navy-soft)' : 'var(--surface)',
+                  color: 'var(--ink, #ffffff)',
                   cursor: 'pointer',
                   textAlign: 'left',
                   width: '100%',
@@ -268,11 +269,11 @@ export function SchemaPage() {
                   {isSelected && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand)' }} />}
                 </span>
                 <span style={{ flex: 1 }}>
-                  <span style={{ display: 'block', fontWeight: 600, fontSize: 13 }}>{m.label}</span>
-                  <span className="text-muted" style={{ display: 'block', fontSize: 12 }}>{m.desc}</span>
+                  <span style={{ display: 'block', fontWeight: 600, fontSize: 13, color: 'var(--ink, #ffffff)' }}>{m.label}</span>
+                  <span className="text-muted" style={{ display: 'block', fontSize: 12, color: 'var(--muted, #a8a29a)' }}>{m.desc}</span>
                 </span>
                 {m.id === 'M_NEST_TYPE_HEADER' && (
-                  <span className="text-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>Recommended</span>
+                  <span className="text-muted" style={{ fontSize: 11, whiteSpace: 'nowrap', color: 'var(--muted, #a8a29a)' }}>Recommended</span>
                 )}
               </button>
             )

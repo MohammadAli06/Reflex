@@ -35,6 +35,9 @@ class Harness:
         llm: LLMClient | None = None,
         secrets: SecretsProvider | None = None,
         audit: AuditLog | None = None,
+        revision_sink=None,
+        snapshot_sink=None,
+        run_id: str | None = None,
     ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(base_url=settings.mock_api_url, timeout=5.0)
@@ -43,9 +46,20 @@ class Harness:
         self.redactor = Redactor([s.value for s in settings.header_secrets.values()])
         self.audit = audit or AuditLog(settings.audit_log_path, redactor=self.redactor)
         self.executor = Executor(self.client, self.secrets)
-        self.registry = ToolRegistry(initial_definitions())
+        self._revision_sink = revision_sink
+        self._snapshot_sink = snapshot_sink
+        self._run_id = run_id
+        self.registry = self._fresh_registry()
         self.events: list[TraceEvent] = []
         self.subscribers: list[Subscriber] = []
+
+    def _fresh_registry(self) -> ToolRegistry:
+        return ToolRegistry(initial_definitions(), on_commit=self._record_revision)
+
+    def _record_revision(self, name: str, definition) -> None:
+        if self._revision_sink is None:
+            return
+        self._revision_sink(name, definition.to_dict(), self._run_id)
 
     def on_event(self, callback: Subscriber) -> None:
         self.subscribers.append(callback)
@@ -58,13 +72,13 @@ class Harness:
     def reset(self) -> dict[str, Any]:
         resp = self.client.post("/admin/reset", headers=self.admin_headers)
         resp.raise_for_status()
-        self.registry = ToolRegistry(initial_definitions())
+        self.registry = self._fresh_registry()
         self.events = []
         return resp.json()
 
     def reset_registry(self) -> None:
         """Fresh tool registry only - leaves the mock's mutated schema in place."""
-        self.registry = ToolRegistry(initial_definitions())
+        self.registry = self._fresh_registry()
         self.events = []
 
     def apply_mutation(self, mutation_id: str, error_style: str | None = None) -> dict[str, Any]:
@@ -110,7 +124,7 @@ class Harness:
         task = get_task(task_id)
         agent = HealingAgent(
             self.registry, self.executor, secrets or self.secrets, self.client,
-            self.audit, self.settings,
+            self.audit, self.settings, snapshot_sink=self._snapshot_sink,
         )
         emitter = emitter or self.make_emitter(run_id, "healing")
         return agent.run(task, run_id, emitter=emitter)

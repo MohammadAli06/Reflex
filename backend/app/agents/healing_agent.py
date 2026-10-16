@@ -27,6 +27,7 @@ class HealingAgent:
         schema_client: httpx.Client,
         audit: AuditLog,
         settings: Settings,
+        snapshot_sink=None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -34,6 +35,7 @@ class HealingAgent:
         self._schema_client = schema_client
         self._audit = audit
         self._settings = settings
+        self._snapshot_sink = snapshot_sink
 
     def run(self, task: Task, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
         emitter = emitter or EventEmitter(run_id, "healing")
@@ -43,6 +45,7 @@ class HealingAgent:
         healer = Healer(
             self._registry, self._executor, self._secrets, self._schema_client,
             self._audit, self._settings, emitter,
+            snapshot_sink=self._snapshot_sink,
         )
         outcome = healer.run(task.tool, task.args, case_id=task.id, dry_run=task.write)
 

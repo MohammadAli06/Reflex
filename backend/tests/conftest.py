@@ -9,7 +9,7 @@ TENANT_TOKEN = "test-tenant-token"
 
 
 @pytest.fixture
-def settings():
+def settings(tmp_path):
     return load_settings(
         env={
             "ADMIN_KEY": ADMIN_KEY,
@@ -17,6 +17,7 @@ def settings():
             "HEADER_X_TENANT_TOKEN": TENANT_TOKEN,
             "MAX_SCHEMA_ATTEMPTS": "3",
             "MAX_INFRA_RETRIES": "2",
+            "DATABASE_URL": f"sqlite:///{(tmp_path / 'reflex_test.db').as_posix()}",
         }
     )
 

@@ -32,6 +32,7 @@ class Env:
                 "HEADER_X_TENANT_TOKEN": TENANT_TOKEN,
                 "MAX_SCHEMA_ATTEMPTS": str(max_schema_attempts),
                 "MAX_INFRA_RETRIES": "2",
+                "DATABASE_URL": f"sqlite:///{audit_path.parent.joinpath('reflex_test.db').as_posix()}",
             }
         )
         self.app = create_app(self.settings)

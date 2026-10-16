@@ -180,6 +180,10 @@
   --hairline-2: #333b4b;
   --focus: #8fb0dd;
 
+  --text: var(--ink);
+  --text-primary: var(--ink);
+  --text-secondary: var(--ink-2);
+  --text-muted: var(--muted);
   --text-inverse: #0f1115;
   --bg-surface-tint: var(--navy-soft);
   --surface-tint: var(--navy-soft);

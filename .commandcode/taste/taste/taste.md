@@ -15,3 +15,9 @@
 - Enforces strict semantic color and typography discipline: limited hues per screen (e.g. red = failed, green = healed, amber = refusal, navy = neutral), one UI sans plus monospace strictly for code/payloads/hashes plus one serif display face for titles and big numbers, tabular numerals for metrics. Confidence: 0.75
 - Requires light and dark themes equally polished with WCAG AA contrast and a working persistent toggle, plus visible keyboard focus, prefers-reduced-motion support, and skeleton plus honest empty/error states on every data view. Confidence: 0.7
 - Expects a final report listing files changed, old-to-new copy changes, and verbatim verification outputs (diff, tests, build). Confidence: 0.6
+- Prefers SQLite (single file, no server) via SQLAlchemy 2.0 for local/Windows hackathon backends, deferring Postgres to a future connection-string swap. Confidence: 0.85
+- Keeps mock/external-service simulators in-memory and persists only the real control plane, accessed via one repository per table so domain code never touches SQL. Confidence: 0.8
+- Requires SQLite correctness hardening: WAL mode + busy_timeout, batched event writes with timestamps captured before the write, hash-chained audit log with verify_chain(), and compare-and-swap via UNIQUE constraint inside a transaction. Confidence: 0.8
+- Prefers safe persistence migrations: dual-write legacy files alongside DB then cut over after tests pass, and non-destructive reset (new revision / reset external mock) rather than wiping history. Confidence: 0.75
+- Expects DB work proven by restart-persistence, single-byte tamper detection naming the broken entry, concurrent-CAS single-winner, and event-replay after restart, with the existing suite still green. Confidence: 0.75
+- Expects code changes accompanied by docs updates, reusing the existing change-tracking markdown file in place rather than creating a new changelog unless none exists. Confidence: 0.6

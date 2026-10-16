@@ -47,10 +47,12 @@ class AuditEntry:
 
 
 class AuditLog:
-    def __init__(self, path: Path, redactor: Redactor | None = None) -> None:
+    def __init__(self, path: Path, redactor: Redactor | None = None,
+                 audit_repo: Any | None = None) -> None:
         self._path = Path(path)
         self._redactor = redactor or Redactor()
         self._lock = threading.RLock()
+        self._audit_repo = audit_repo
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -67,10 +69,20 @@ class AuditLog:
         with self._lock:
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
+        if self._audit_repo is not None:
+            with self._lock:
+                self._audit_repo.append(safe)
         return safe
+
+    def verify_chain(self) -> tuple[bool, int | None]:
+        if self._audit_repo is not None:
+            return self._audit_repo.verify_chain()
+        return True, None
 
     def read(self, *, outcome: str | None = None, run_id: str | None = None,
              limit: int | None = None) -> list[dict[str, Any]]:
+        if self._audit_repo is not None:
+            return self._audit_repo.read(outcome=outcome, run_id=run_id, limit=limit)
         if not self._path.exists():
             return []
         entries: list[dict[str, Any]] = []

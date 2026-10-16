@@ -16,3 +16,8 @@ class RunRequest(BaseModel):
 
 class StyleRequest(BaseModel):
     error_style: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str

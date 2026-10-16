@@ -78,6 +78,9 @@ class Settings:
     audit_log_path: Path
     results_dir: Path
     frontend_origin: str
+    database_url: str
+    admin_username: str
+    admin_password: str
     header_secrets: dict[str, HeaderSecret] = field(default_factory=dict)
 
     # ---- safety helpers -------------------------------------------------
@@ -148,6 +151,12 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         p = Path(raw)
         return p if p.is_absolute() else BASE_DIR / p
 
+    data_dir = _path("DATA_DIR", "data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    database_url = (env.get("DATABASE_URL") or "").strip()
+    if not database_url:
+        database_url = f"sqlite:///{(data_dir / 'reflex.db').as_posix()}"
+
     return Settings(
         google_api_key=(env.get("GOOGLE_API_KEY") or "").strip(),
         llm_model=(env.get("LLM_MODEL") or "gemini-3.8-flash").strip(),
@@ -161,6 +170,9 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         audit_log_path=_path("AUDIT_LOG_PATH", "audit/audit.jsonl"),
         results_dir=_path("RESULTS_DIR", "results"),
         frontend_origin=(env.get("FRONTEND_ORIGIN") or "http://localhost:5173").rstrip("/"),
+        database_url=database_url,
+        admin_username=(env.get("ADMIN_USER") or "operator").strip(),
+        admin_password=(env.get("ADMIN_PASS") or "reflex2026").strip(),
         header_secrets=_collect_header_secrets(env),
     )
 

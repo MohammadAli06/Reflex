@@ -23,7 +23,11 @@
       "Shell(curl -s -o NUL -w landing_module=%{http_code}\\n http://localhost:5173/src/pages/LandingPage.tsx)",
       "Shell(curl -s -o NUL -w css=%{http_code}\\n http://localhost:5173/src/landing.css)",
       "Shell(type:*)",
-      "Shell(pnpm:*)"
+      "Shell(pnpm:*)",
+      "Shell(pip:*)",
+      "Shell(grep:*)",
+      "Shell(where:*)",
+      "powershell"
     ],
     "deny": [],
     "defaultMode": "default"
