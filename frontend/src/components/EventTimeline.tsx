@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { TraceEvent } from '../types'
 import { SchemaDiffView, type SchemaDiffData } from './SchemaDiffView'
+import { ExchangeCard, ExchangeRecord, ValidatorChecks } from './ExchangeCard'
+import { JsonViewer } from './JsonViewer'
 import { CopyButton } from './ui/CopyButton'
 import {
   IconActivity,
@@ -17,6 +19,7 @@ import {
 const LABELS: Record<string, string> = {
   run_started: 'Run started',
   task_started: 'Task started',
+  http_exchange: 'HTTP exchange',
   call_attempt: 'Request sent',
   error_detected: 'Request failed (422)',
   error_classified: 'Failure diagnosed',
@@ -183,26 +186,28 @@ function EventRow({ ev, t0 }: { ev: TraceEvent; t0: number }) {
           onClick={() => setShowDetails(!showDetails)}
         >
           {showDetails ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-          <span>{showDetails ? 'Hide raw event details' : 'Show details'}</span>
+          <span>{showDetails ? 'Hide details' : 'Show details'}</span>
         </button>
 
         {showDetails && (
           <div style={{ marginTop: 8 }}>
-            <pre
-              style={{
-                margin: 0,
-                padding: '8px 12px',
-                background: 'var(--bg-subtle)',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: 11,
-                fontFamily: 'var(--font-mono)',
-                overflowX: 'auto',
-                color: 'var(--text-secondary)',
-              }}
-            >
-              {JSON.stringify(ev.data, null, 2)}
-            </pre>
+            {ev.type === 'http_exchange' ? (
+              <ExchangeCard exchange={ev.data as unknown as ExchangeRecord} />
+            ) : ev.type === 'schema_diff' ? (
+              <SchemaDiffView diff={ev.data as SchemaDiffData} />
+            ) : ev.type === 'validation_result' ? (
+              <ValidatorChecks
+                ok={Boolean(data.ok)}
+                errors={Array.isArray(data.errors) ? (data.errors as unknown[]) : null}
+                reasonCode={(data.reason_code as string) ?? null}
+              />
+            ) : Object.keys(ev.data ?? {}).length === 0 ? (
+              <div className="state state-empty" style={{ padding: 12 }}>
+                No detail recorded for this event.
+              </div>
+            ) : (
+              <JsonViewer value={ev.data} />
+            )}
           </div>
         )}
       </div>

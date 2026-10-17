@@ -5,127 +5,114 @@ import { useRunEvents } from '../hooks/useRunEvents'
 import { PageHead, Panel } from '../components/console'
 import { EventTimeline } from '../components/EventTimeline'
 import { ErrorState, LoadingState } from '../components/StateViews'
-import { RaceTrack } from '../components/ui/RaceTrack'
-import type { StepInfo } from '../components/ui/Stepper'
+import { HorizontalStepper, type StepInfo } from '../components/ui/Stepper'
+import { ExchangeCard, ExchangeRecord, ValidatorChecks } from '../components/ExchangeCard'
+import { JsonViewer } from '../components/JsonViewer'
+import { SchemaDiffView, type SchemaDiffData } from '../components/SchemaDiffView'
 import { CopyButton } from '../components/ui/CopyButton'
-import {
-  IconPlay,
-  IconRefresh,
-} from '../components/ui/Icons'
+import { IconPlay, IconRefresh } from '../components/ui/Icons'
 import { DASH, num, secs } from '../utils/format'
-import type { CaseInfo, RunRecord, RunSummary } from '../types'
+import type { CaseInfo, RunRecord, RunSummary, TraceEvent } from '../types'
 
-const STEP_LABELS = [
-  'Call',
-  '422 error',
-  'Diagnose',
-  'Fetch schema',
-  'Diff',
-  'Validate',
-  'Patch',
-  'Retry',
-  'Verified',
-]
+/** The five demo steps; every status is derived from stored records/events. */
+const DEMO_STEPS = ['Break the API', 'Baseline', 'Reflex', 'Validate / Patch', 'Retry / Verify']
 
-function computeBaselineSteps(
-  record: RunRecord | null,
-  running: boolean,
-): StepInfo[] {
-  if (!record && !running) {
-    return STEP_LABELS.map((label) => ({
-      label,
-      status: 'pending',
-    }))
-  }
+type TraceList = TraceEvent[]
 
-  if (running && !record) {
-    return STEP_LABELS.map((label, idx) => ({
-      label,
-      status: idx === 0 ? 'completed' : idx === 1 ? 'current' : 'pending',
-    }))
-  }
-
-  // Baseline finished
-  return STEP_LABELS.map((label, idx) => {
-    if (idx === 0) return { label, status: 'completed', tooltip: 'Initial request dispatched' }
-    if (idx === 1) return { label, status: 'failed', tooltip: 'HTTP 422 Unprocessable Entity returned' }
-    if (idx === 7) return { label, status: 'failed', tooltip: `Retried ${record?.attempts ?? 3} times without adaptation` }
-    return { label, status: 'skipped', tooltip: 'No self-healing mechanism available in baseline' }
-  })
+function eventsOf(events: TraceList, type: string, agent?: string): TraceEvent[] {
+  return events.filter((e) => e.type === type && (agent ? e.agent === agent : true))
 }
 
-function computeReflexSteps(
-  record: RunRecord | null,
+function latestOf(events: TraceList, type: string, agent?: string): TraceEvent | undefined {
+  const list = eventsOf(events, type, agent)
+  return list[list.length - 1]
+}
+
+function latestExchange(events: TraceList, step: string, agent?: string): ExchangeRecord | undefined {
+  const list = events
+    .filter((e) => e.type === 'http_exchange' && (agent ? e.agent === agent : true))
+    .filter((e) => (e.data.step as string) === step)
+  const ev = list[list.length - 1]
+  return ev ? (ev.data as unknown as ExchangeRecord) : undefined
+}
+
+/**
+ * Step statuses come strictly from stored data: a step with no record stays
+ * "pending" even when later steps exist. There is no timer.
+ */
+function deriveSteps(
+  baseline: RunRecord | null,
+  healing: RunRecord | null,
   running: boolean,
-  events: Array<{ type: string }>,
+  events: TraceList,
 ): StepInfo[] {
-  if (!record && !running) {
-    return STEP_LABELS.map((label) => ({
-      label,
-      status: 'pending',
-    }))
-  }
+  const has = (type: string, agent?: string) => eventsOf(events, type, agent).length > 0
+  const broken = has('error_detected')
+  const baselineDone = baseline !== null
+  const healingDone = healing !== null
+  const patched = has('patch_applied')
+  const refused = healingDone && healing.outcome === 'refused'
+  const verified = has('verified', 'healing')
 
-  if (running && !record) {
-    const hasType = (t: string) => events.some((e) => e.type === t)
-    const s1 = hasType('call_attempt')
-    const s2 = hasType('error_detected')
-    const s3 = hasType('error_classified')
-    const s4 = hasType('schema_fetched')
-    const s5 = hasType('schema_diff')
-    const s6 = hasType('validation_result') || hasType('candidate_patch')
-    const s7 = hasType('patch_applied')
-    const s8 = hasType('retry')
-    const s9 = hasType('verified')
+  const step = (
+    done: boolean,
+    started: boolean,
+    failed = false,
+  ): StepInfo['status'] => (done ? 'completed' : failed ? 'failed' : started ? 'current' : 'pending')
 
-    const statuses: Array<'pending' | 'current' | 'completed'> = [
-      s1 ? 'completed' : 'current',
-      s2 ? 'completed' : s1 ? 'current' : 'pending',
-      s3 ? 'completed' : s2 ? 'current' : 'pending',
-      s4 ? 'completed' : s3 ? 'current' : 'pending',
-      s5 ? 'completed' : s4 ? 'current' : 'pending',
-      s6 ? 'completed' : s5 ? 'current' : 'pending',
-      s7 ? 'completed' : s6 ? 'current' : 'pending',
-      s8 ? 'completed' : s7 ? 'current' : 'pending',
-      s9 ? 'completed' : s8 ? 'current' : 'pending',
-    ]
+  const refusalReason = refused ? (healing.reason_code ?? DASH) : undefined
 
-    return STEP_LABELS.map((label, idx) => ({
-      label,
-      status: statuses[idx],
-    }))
-  }
+  return [
+    {
+      label: DEMO_STEPS[0],
+      status: step(broken, broken || running),
+      tooltip: broken ? 'A real 4xx response was recorded from the mock API.' : undefined,
+    },
+    {
+      label: DEMO_STEPS[1],
+      status: step(baselineDone, broken || running),
+      tooltip: baselineDone ? `Baseline finished: ${baseline.outcome}` : undefined,
+    },
+    {
+      label: DEMO_STEPS[2],
+      status: step(healingDone, baselineDone || (broken && running), refused),
+      tooltip: refusalReason ? `Reflex stopped: ${refusalReason}` : undefined,
+    },
+    {
+      label: DEMO_STEPS[3],
+      status: semanticsPatchStep(patched, refused, healingDone, broken, running),
+      tooltip: refusalReason ? `Refused: ${refusalReason}` : undefined,
+    },
+    {
+      label: DEMO_STEPS[4],
+      status: verified
+        ? 'completed'
+        : refused
+        ? 'failed'
+        : healingDone && healing.outcome !== 'recovered'
+        ? 'failed'
+        : patched && running ? 'current' : 'pending',
+      tooltip: verified ? 'Retry verified against the server.' : undefined,
+    },
+  ]
+}
 
-  // Run finished
-  const outcome = record?.outcome
-  if (outcome === 'recovered') {
-    return STEP_LABELS.map((label) => ({
-      label,
-      status: 'completed',
-    }))
-  }
+function semanticsPatchStep(
+  patched: boolean,
+  refused: boolean,
+  healingDone: boolean,
+  broken: boolean,
+  running: boolean,
+): StepInfo['status'] {
+  if (patched) return 'completed'
+  if (refused) return 'failed'
+  if (healingDone) return 'failed'
+  if (running && broken) return 'current'
+  return 'pending'
+}
 
-  if (outcome === 'refused') {
-    return STEP_LABELS.map((label, idx) => {
-      if (idx < 5) return { label, status: 'completed' }
-      if (idx === 5) return { label, status: 'failed', tooltip: `Refused: ${record?.reason_code ?? 'Ambiguous mapping'}` }
-      return { label, status: 'skipped', tooltip: 'Safely halted before applying unverified patch' }
-    })
-  }
-
-  if (outcome === 'not_drift_reported') {
-    return STEP_LABELS.map((label, idx) => {
-      if (idx < 2) return { label, status: 'completed' }
-      if (idx === 2) return { label, status: 'failed', tooltip: 'Identified external server fault, not schema drift' }
-      return { label, status: 'skipped' }
-    })
-  }
-
-  // Default fallback
-  return STEP_LABELS.map((label, idx) => ({
-    label,
-    status: idx < 2 ? 'completed' : idx === 2 ? 'failed' : 'skipped',
-  }))
+function badgeBaselineTone(outcome: string): string {
+  return outcome === 'failed' ? 'failure' : outcome === 'refused' ? 'warning' : 'neutral'
 }
 
 export function ComparePage() {
@@ -147,6 +134,8 @@ export function ComparePage() {
     setSummary(null)
     setRunId(undefined)
     try {
+      // The run executes BOTH agent lanes against the same drift; that is the
+      // only comparison the backend records, so the button says exactly that.
       const started = await api.startRun([caseId], 1)
       setRunId(started.run_id)
       if (timer.current) window.clearInterval(timer.current)
@@ -175,7 +164,6 @@ export function ComparePage() {
   const allCases: CaseInfo[] = cases.data?.cases ?? []
   const tuningCases = allCases.filter((c) => c.split === 'tuning')
 
-  // Group cases into 3 categories
   const recoverableCases = tuningCases.filter((c) => c.expected_outcome === 'recovered')
   const refusalCases = tuningCases.filter((c) => c.expected_outcome === 'refused')
   const notDriftCases = tuningCases.filter((c) => c.expected_outcome === 'not_drift_reported')
@@ -184,11 +172,27 @@ export function ComparePage() {
   const healing = summary?.records.find((r) => r.agent === 'healing') ?? null
   const running = summary?.status === 'running' || (runId !== undefined && summary === null)
 
-  const baselineSteps = computeBaselineSteps(baseline, running)
-  const reflexSteps = computeReflexSteps(healing, running, events)
+  const steps = deriveSteps(baseline, healing, running, events)
 
-  const mttr = healing && healing.t_break !== null && healing.t_recovery !== null
+  // Per-lane stored elements — everything below comes from run events/records.
+  const baselineStarted = events.find((e) => e.agent === 'baseline' && e.type === 'run_started')
+  const baselineTool = (baselineStarted?.data?.tool_definition ?? null) as Record<string, unknown> | null
+  const baselineExchange = latestExchange(events, 'baseline_call', 'baseline')
+
+  const specFetch = latestExchange(events, 'spec_fetch', 'healing')
+  const classified = latestOf(events, 'error_classified', 'healing')
+  const diffEv = latestOf(events, 'schema_diff')
+  const candidate = latestOf(events, 'candidate_patch', 'healing')
+  const validation = latestOf(events, 'validation_result', 'healing')
+  const applied = latestOf(events, 'patch_applied', 'healing')
+  const healingRefusal = latestOf(events, 'refused', 'healing')
+  const retryExchange = latestExchange(events, 'retry_call', 'healing')
+
+  const healingMttr = healing && healing.t_break !== null && healing.t_recovery !== null
     ? healing.t_recovery - healing.t_break
+    : null
+  const baselineMttr = baseline && baseline.t_break !== null && baseline.t_recovery !== null
+    ? baseline.t_recovery - baseline.t_break
     : null
 
   const selectedCase = tuningCases.find((c) => c.id === caseId)
@@ -203,17 +207,6 @@ export function ComparePage() {
     { id: 'missing_credential', label: 'Missing credential' },
     { id: 'not_drift_5xx', label: 'External 500' },
   ]
-
-  const baselineStatus = baseline
-    ? 'Failed, retries exhausted'
-    : running ? 'Running' : 'Not run yet'
-  const healingStatus = healing
-    ? healing.outcome === 'recovered'
-      ? 'Recovered'
-      : healing.outcome === 'refused'
-        ? 'Refused safely'
-        : healing.outcome
-    : running ? 'Running' : 'Not run yet'
 
   return (
     <div className="con-page">
@@ -244,7 +237,7 @@ export function ComparePage() {
               ) : (
                 <>
                   <IconPlay size={16} />
-                  <span>Run comparison</span>
+                  <span>Run both agents</span>
                 </>
               )}
             </button>
@@ -363,36 +356,14 @@ export function ComparePage() {
         )}
       </div>
 
-      <RaceTrack
-        steps={STEP_LABELS}
-        header={
-          runId ? (
-            <div style={{ padding: '12px 20px 0', fontSize: 12 }} className="text-muted">
-              <span>Run </span>
-              <CopyButton text={runId} truncateLength={12} />
-            </div>
-          ) : undefined
-        }
-        tracks={[
-          {
-            key: 'Baseline',
-            name: 'Baseline',
-            sub: 'Retries the original request; no schema update.',
-            tone: 'baseline',
-            states: baselineSteps.map((s) => s.status),
-          },
-          {
-            key: 'Reflex',
-            name: 'Reflex',
-            sub:
-              healing?.outcome === 'refused'
-                ? 'Stops before applying an unverified patch.'
-                : 'Adapts from the live schema, then retries.',
-            tone: 'reflex',
-            states: reflexSteps.map((s) => s.status),
-          },
-        ]}
-      />
+      {/* Step 01..05 — stepper statuses come from records only. */}
+      <HorizontalStepper steps={steps} />
+      {runId && (
+        <div className="con-row text-muted" style={{ padding: '12px 20px 0', fontSize: 12 }}>
+          <span>Run </span>
+          <CopyButton text={runId} truncateLength={12} />
+        </div>
+      )}
 
       {idle ? (
         <div className="state state-empty" style={{ padding: '48px 24px' }}>
@@ -404,121 +375,179 @@ export function ComparePage() {
           </svg>
           <strong>Press Run to start</strong>
           <span className="text-muted" style={{ fontSize: 13, maxWidth: 440 }}>
-            Both agents will replay the selected scenario step by step on the timeline above.
+            Both agents replay the selected scenario; steps fill in only as their records are written.
           </span>
         </div>
       ) : (
-        <div className="con-grid-2">
+        <div className="con-grid-2" style={{ alignItems: 'start' }}>
+          {/* ----- Baseline lane ----- */}
           <div className="card" style={{ padding: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Baseline</div>
-            <div className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>Fixed schema, no adaptation</div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
-              <strong className="serif" style={{ fontSize: 22, fontWeight: 500 }}>{baselineStatus}</strong>
-              <span className={`badge badge-${baseline ? 'failure' : 'neutral'}`}>{baseline ? 'Failed' : running ? 'Running' : 'Idle'}</span>
+            <div className="con-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Baseline</div>
+                <div className="text-muted" style={{ fontSize: 12 }}>
+                  Plain tool-calling loop (framework: {baseline?.framework ?? 'plain-loop'}) — fixed schema, no adaptation
+                </div>
+              </div>
+              {baseline ? (
+                <span className={`badge badge-${badgeBaselineTone(baseline.outcome)}`}>
+                  {baseline.outcome}
+                </span>
+              ) : (
+                <span className="badge badge-neutral">{running ? 'Running' : 'Not started'}</span>
+              )}
             </div>
-            <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
-              <div><dt className="text-label" style={{ fontSize: 11 }}>Time</dt><dd className="font-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{DASH}</dd></div>
-              <div><dt className="text-label" style={{ fontSize: 11 }}>Tokens</dt><dd className="font-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{baseline ? num(baseline.tokens_total) : DASH}</dd></div>
-              <div><dt className="text-label" style={{ fontSize: 11 }}>Attempts</dt><dd className="font-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{baseline ? num(baseline.attempts) : DASH}</dd></div>
-            </dl>
-            <p className="text-muted" style={{ margin: '12px 0 0', fontSize: 12 }}>{baseline ? `Stopped: ${baseline.reason_code ?? 'retries exhausted'}.` : 'Awaiting execution.'}</p>
+
+            {baselineExchange ? (
+              <div style={{ marginTop: 12 }}>
+                <ExchangeCard exchange={baselineExchange} title="Failing call" />
+              </div>
+            ) : (
+              <p className="con-sub" style={{ fontSize: 12, marginTop: 12 }}>
+                Baseline call exchange: no detail recorded (—).
+              </p>
+            )}
+
+            {baselineTool ? (
+              <div style={{ marginTop: 12 }}>
+                <div className="text-label" style={{ marginBottom: 6 }}>
+                  Tool schema used (stale, recorded at run start) — revision{' '}
+                  {baselineTool.revision != null ? String(baselineTool.revision) : DASH}
+                </div>
+                <JsonViewer value={baselineTool} label="Stale tool definition (recorded at run start)" />
+              </div>
+            ) : null}
+
+            <div className="con-row" style={{ justifyContent: 'space-between', marginTop: 14, fontSize: 12, flexWrap: 'wrap', gap: 8 }}>
+              <span className="text-muted">
+                Calls: <b>{baseline ? num(baseline.attempts) : DASH}</b> · Tokens:{' '}
+                <b>{baseline ? num(baseline.tokens_total) : DASH}</b>
+              </span>
+              <span className="text-muted">
+                First failure → {baselineMttr !== null ? secs(baselineMttr) : DASH}
+              </span>
+            </div>
           </div>
+
+          {/* ----- Reflex lane ----- */}
           <div className="card" style={{ padding: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600 }}>Reflex</div>
-            <div className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>{healing ? `${healing.healing_path} path` : 'Live schema adaptation'}</div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
-              <strong className="serif" style={{ fontSize: 22, fontWeight: 500 }}>{healingStatus}</strong>
-              <span className={`badge badge-${healing ? (healing.outcome === 'recovered' ? 'success' : healing.outcome === 'refused' ? 'warning' : 'neutral') : 'neutral'}`}>{healing ? (healing.outcome === 'recovered' ? 'Verified' : healing.outcome === 'refused' ? 'Refused' : healing.outcome) : running ? 'Running' : 'Idle'}</span>
+            <div className="con-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>Reflex</div>
+                <div className="text-muted" style={{ fontSize: 12 }}>
+                  {healing?.framework ?? 'rule-based-healer'} — live schema adaptation
+                </div>
+              </div>
+              {healing ? (
+                <span className={`badge badge-${healing.outcome === 'recovered' ? 'success' : healing.outcome === 'refused' ? 'warning' : 'neutral'}`}>
+                  {healing.outcome}
+                </span>
+              ) : (
+                <span className="badge badge-neutral">{running ? 'Running' : 'Not started'}</span>
+              )}
             </div>
-            <dl style={{ margin: 0, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
-              <div><dt className="text-label" style={{ fontSize: 11 }}>Time</dt><dd className="font-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{healing && mttr !== null ? secs(mttr) : DASH}</dd></div>
-              <div><dt className="text-label" style={{ fontSize: 11 }}>Tokens</dt><dd className="font-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{healing ? num(healing.tokens_total) : DASH}</dd></div>
-              <div><dt className="text-label" style={{ fontSize: 11 }}>Attempts</dt><dd className="font-mono" style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>{healing ? num(healing.attempts) : DASH}</dd></div>
-            </dl>
-            <p className="text-muted" style={{ margin: '12px 0 0', fontSize: 12 }}>
-              {healing?.outcome === 'recovered'
-                ? 'Detected the schema change, validated a patch, and verified the retry.'
-                : healing?.outcome === 'refused'
-                  ? `Stopped safely: ${healing.reason_code ?? 'could not verify a fix'}.`
-                  : 'Awaiting execution.'}
-            </p>
+
+            {/* First-class refusal — reason code comes from the run record */}
+            {healing?.outcome === 'refused' ? (
+              <div className="notice notice-warning" style={{ marginTop: 12 }}>
+                <b>Refused</b> — reason code{' '}
+                <code>{healing.reason_code ?? String(healingRefusal?.data?.reason_code ?? DASH)}</code>
+                {healingRefusal?.data?.detail ? (<> · <span>{String(healingRefusal.data.detail)}</span></>) : null}
+                . No patch applied, no retry sent.
+              </div>
+            ) : null}
+
+            {specFetch ? (
+              <div style={{ marginTop: 12 }}>
+                <ExchangeCard exchange={specFetch} title="Spec fetched" />
+              </div>
+            ) : (
+              <p className="con-sub" style={{ fontSize: 12, marginTop: 12 }}>Spec fetch: no exchange recorded (—).</p>
+            )}
+
+            {classified ? (
+              <div className="con-row" style={{ gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
+                <span className="text-label">Drift classification:</span>
+                <span className="badge badge-neutral font-mono">{String(classified.data?.category ?? DASH)}</span>
+                <span className="text-muted" style={{ fontSize: 12 }}>{String(classified.data?.explanation ?? '')}</span>
+              </div>
+            ) : null}
+
+            {diffEv ? (
+              <div style={{ marginTop: 12 }}>
+                <SchemaDiffView diff={diffEv.data as SchemaDiffData} />
+              </div>
+            ) : (
+              healing && (
+                <p className="con-sub" style={{ fontSize: 12, marginTop: 12 }}>Schema diff: not recorded (—).</p>
+              )
+            )}
+
+            {candidate && !candidate.data?.refused ? (
+              <div style={{ marginTop: 12 }}>
+                <div className="text-label" style={{ marginBottom: 6 }}>
+                  Candidate patch — confidence{' '}
+                  {typeof candidate.data?.confidence === 'number'
+                    ? (candidate.data.confidence as number).toFixed(2)
+                    : DASH}
+                </div>
+                <ul className="con-sub" style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+                  {Array.isArray(candidate.data?.evidence)
+                    ? (candidate.data.evidence as unknown[]).map((item, idx) => (
+                        <li key={idx} style={{ marginTop: 2 }}>{String(item)}</li>
+                      ))
+                    : null}
+                </ul>
+              </div>
+            ) : null}
+
+            {validation ? (
+              <div style={{ marginTop: 12 }}>
+                <ValidatorChecks
+                  ok={Boolean(validation.data?.ok)}
+                  errors={Array.isArray(validation.data?.errors) ? (validation.data.errors as unknown[]) : []}
+                  reasonCode={(validation.data?.reason_code as string) ?? null}
+                />
+              </div>
+            ) : null}
+
+            {applied ? (
+              <div className="con-row" style={{ gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                <span className="text-label">Registry</span>
+                <span className="font-mono text-muted" style={{ fontSize: 12 }}>
+                  revision{' '}
+                  {applied.data?.revision_before != null
+                    ? `${String(applied.data.revision_before)} → `
+                    : DASH + ' → '}
+                  <b>{String(applied.data?.revision ?? DASH)}</b>
+                </span>
+              </div>
+            ) : (
+              healing && (
+                <p className="con-sub" style={{ fontSize: 12, marginTop: 12 }}>No patch applied (—).</p>
+              )
+            )}
+
+            {retryExchange ? (
+              <div style={{ marginTop: 12 }}>
+                <ExchangeCard exchange={retryExchange} title="Verified retry" />
+              </div>
+            ) : healing && applied ? (
+              <p className="con-sub" style={{ fontSize: 12, marginTop: 12 }}>Retry exchange: no detail recorded (—).</p>
+            ) : null}
+
+            <div className="con-row" style={{ justifyContent: 'space-between', marginTop: 14, fontSize: 12, flexWrap: 'wrap', gap: 8 }}>
+              <span className="text-muted">
+                Calls: <b>{healing ? num(healing.attempts) : DASH}</b> · Tokens:{' '}
+                <b>{healing ? num(healing.tokens_total) : DASH}</b>
+              </span>
+              <span className="text-muted">
+                Failing call → verified retry: <b>{healingMttr !== null ? secs(healingMttr) : DASH}</b>
+              </span>
+            </div>
           </div>
         </div>
       )}
-
-      <div className="card" style={{ padding: 20 }}>
-        <div className="con-row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
-          <span className="text-label">Run summary</span>
-          {runId && (
-            <span className="con-row" style={{ gap: 6, fontSize: 12 }}>
-              <span className="text-muted">Run ID:</span>
-              <CopyButton text={runId} truncateLength={12} />
-            </span>
-          )}
-        </div>
-
-        <div className="con-grid-4">
-          <div style={{ background: 'var(--surface-2)', padding: 14, borderRadius: 'var(--radius)' }}>
-            <div className="text-label" style={{ fontSize: 11 }}>Final outcome</div>
-            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Baseline:</span>
-                <span className="con-bad font-mono" style={{ fontWeight: 600 }}>{baseline?.outcome ?? DASH}</span>
-              </div>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Reflex:</span>
-                <span className="con-accent font-mono" style={{ fontWeight: 600 }}>{healing?.outcome ?? DASH}</span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ background: 'var(--surface-2)', padding: 14, borderRadius: 'var(--radius)' }}>
-            <div className="text-label" style={{ fontSize: 11 }}>Recovery time</div>
-            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Baseline:</span>
-                <span className="text-muted font-mono">Unrecovered</span>
-              </div>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Reflex:</span>
-                <span className="con-accent font-mono" style={{ fontWeight: 600 }}>
-                  {healing && mttr !== null ? secs(mttr) : DASH}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ background: 'var(--surface-2)', padding: 14, borderRadius: 'var(--radius)' }}>
-            <div className="text-label" style={{ fontSize: 11 }}>Tokens used</div>
-            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Baseline:</span>
-                <span className="font-mono">{baseline ? num(baseline.tokens_total) : DASH}</span>
-              </div>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Reflex:</span>
-                <span className="font-mono con-accent">{healing ? num(healing.tokens_total) : DASH}</span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ background: 'var(--surface-2)', padding: 14, borderRadius: 'var(--radius)' }}>
-            <div className="text-label" style={{ fontSize: 11 }}>Upstream response</div>
-            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Baseline:</span>
-                <span className="con-bad font-mono">{baseline ? (baseline.server_payload_ok ? 'OK' : 'Failed') : DASH}</span>
-              </div>
-              <div className="con-row" style={{ justifyContent: 'space-between', fontSize: 12 }}>
-                <span className="text-muted">Reflex:</span>
-                <span className="con-accent font-mono" style={{ fontWeight: 600 }}>
-                  {healing ? (healing.server_payload_ok ? 'Verified (200)' : 'Stopped') : DASH}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <Panel
         title="Replay event trace"

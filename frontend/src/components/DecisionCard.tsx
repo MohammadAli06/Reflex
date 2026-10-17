@@ -1,7 +1,7 @@
 import { api } from '../api/client'
 import { useApi } from '../hooks/useApi'
 import { EmptyState, LoadingState, ErrorState } from './StateViews'
-import { JsonViewer } from './JsonViewer'
+import { DefinitionSplit } from './ExchangeCard'
 import { StatusBadge } from './StatusBadge'
 import { DASH } from '../utils/format'
 
@@ -61,24 +61,12 @@ export function DecisionCard({ runId }: { runId: string }) {
         </div>
       </div>
 
-      <div className="con-grid-2">
-        <div>
-          <div className="text-label" style={{ marginBottom: 6 }}>Schema before</div>
-          {entry.old_definition ? (
-            <JsonViewer value={entry.old_definition} />
-          ) : (
-            <div className="state state-empty" style={{ padding: 16 }}>No original definition recorded.</div>
-          )}
-        </div>
-        <div>
-          <div className="text-label" style={{ marginBottom: 6 }}>Schema after</div>
-          {entry.new_definition ? (
-            <JsonViewer value={entry.new_definition} />
-          ) : (
-            <div className="state state-empty" style={{ padding: 16 }}>No patch applied (safe refusal or non-drift).</div>
-          )}
-        </div>
-      </div>
+      <DefinitionSplit
+        labelBefore="Schema before"
+        labelAfter="Schema after"
+        before={entry.old_definition}
+        after={entry.new_definition}
+      />
     </div>
   )
 }

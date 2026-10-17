@@ -80,6 +80,42 @@ export interface TraceEvent {
   data: Record<string, unknown>
 }
 
+/** Full HTTP exchange captured by the backend for one request/response pair. */
+export interface ExchangeRecord {
+  step?: string
+  method?: string
+  url?: string | null
+  attempt?: number | null
+  request_headers?: Record<string, string> | null
+  request_body?: Record<string, unknown> | string | null
+  response_status?: number | null
+  response_headers?: Record<string, string> | null
+  response_body?: Record<string, unknown> | string | null
+  started_at?: string | null
+  duration_ms?: number | null
+  error?: string | null
+  truncated?: boolean
+}
+
+/** OpenAPI contract view captured before/after a mutation (real mock specs). */
+export interface SpecView {
+  version?: number | null
+  sha256?: string | null
+  request_schemas?: Record<string, unknown>
+  required_headers?: Record<string, unknown>[]
+  response_schemas?: Record<string, unknown>
+  error_style?: string | null
+  operation?: unknown
+}
+
+export interface MutateResult {
+  version: number
+  consistency: ConsistencyResult
+  mutation?: { id?: string; description?: string } | null
+  spec_before?: SpecView | null
+  spec_after?: SpecView | null
+}
+
 export interface RunRecord {
   run_id: string
   case_id: string
@@ -119,6 +155,8 @@ export interface RunSummary {
   error: string | null
   records: RunRecord[]
   event_count: number
+  /** Optional: http_exchange events shipped with the run (newer runs). */
+  exchanges?: TraceEvent[]
 }
 
 export interface AuditEntry {

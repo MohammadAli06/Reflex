@@ -49,6 +49,18 @@ class ToolDefinition:
         return ToolDefinition.from_dict(data)
 
 
+def definition_snapshot(definition: "ToolDefinition") -> dict[str, Any]:
+    """Record the definition as it was at run start (the stale view)."""
+    return {
+        "name": definition.name,
+        "revision": definition.revision,
+        "endpoint": definition.endpoint,
+        "method": definition.method,
+        "request_schema": definition.request_schema,
+        "required_headers": [h.get("name") for h in definition.required_headers],
+    }
+
+
 def _fetch_definition() -> ToolDefinition:
     return ToolDefinition(
         name="fetch_user",

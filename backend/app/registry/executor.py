@@ -131,6 +131,14 @@ class Executor:
         self._secrets = secrets
         self._timeout_s = timeout_s
 
+    def base_url(self) -> str:
+        """Absolute base URL of the API this executor talks to."""
+        return str(self._client.base_url)
+
+    def request_url(self, prepared: PreparedRequest) -> str:
+        """Full recorded URL for an exchange record (base + endpoint path)."""
+        return self.base_url().rstrip("/") + prepared.endpoint
+
     def call(self, prepared: PreparedRequest) -> CallResult:
         started = time.perf_counter()
         try:

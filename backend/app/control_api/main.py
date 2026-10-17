@@ -51,6 +51,20 @@ def _initial_tool_dicts() -> dict[str, dict[str, Any]]:
     return {name: d.to_dict() for name, d in initial_definitions().items()}
 
 
+def _spec_view(openapi: dict[str, Any]) -> dict[str, Any]:
+    """The real mock OpenAPI contract view: active block + demo operation."""
+    active = openapi.get("x-active-schema", {})
+    return {
+        "version": active.get("version"),
+        "sha256": canonical_hash(active) if active else None,
+        "request_schemas": active.get("request_schemas", {}),
+        "required_headers": active.get("required_headers", []),
+        "response_schemas": active.get("response_schemas", {}),
+        "error_style": active.get("error_style"),
+        "operation": (openapi.get("paths", {}).get("/user/fetch", {}) or {}).get("post"),
+    }
+
+
 def create_app(settings: Settings | None = None, mock_client: httpx.Client | None = None) -> FastAPI:
     settings = settings or get_settings()
     mock = mock_client or httpx.Client(base_url=settings.mock_api_url, timeout=5.0)
@@ -267,14 +281,33 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
 
     @app.post("/api/mutate")
     async def mutate(payload: MutateRequest):
+        try:
+            before_doc = mock.get("/openapi.json", timeout=5.0).json()
+        except Exception:
+            before_doc = None
         resp = mock.post("/admin/mutate", json=payload.model_dump(exclude_none=True),
                          headers=admin_headers(), timeout=5.0)
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        try:
+            after_doc = mock.get("/openapi.json", timeout=5.0).json()
+        except Exception:
+            after_doc = None
         check = run_consistency()
         if not check["pass"]:
             raise HTTPException(status_code=500, detail={"message": "consistency check failed", **check})
-        return {"version": check["version"], "consistency": check}
+        mutation = next(
+            (m for m in list_mutations() if m.get("id") == payload.mutation_id), None)
+        return {
+            "version": check["version"],
+            "consistency": check,
+            "mutation": None if mutation is None else {
+                "id": mutation.get("id"),
+                "description": mutation.get("description"),
+            },
+            "spec_before": None if before_doc is None else _spec_view(before_doc),
+            "spec_after": None if after_doc is None else _spec_view(after_doc),
+        }
 
     @app.post("/api/reset")
     async def reset():
@@ -314,7 +347,19 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         state = run_manager.get(run_id)
         if state is None:
             raise HTTPException(status_code=404, detail="run not found")
-        return state.summary()
+        summary = state.summary()
+        summary["exchanges"] = [e.to_dict() for e in state.events if e.type == "http_exchange"]
+        return summary
+
+    @app.get("/api/runs/{run_id}/exchanges")
+    async def run_exchanges(run_id: str):
+        state = run_manager.get(run_id)
+        if state is None:
+            raise HTTPException(status_code=404, detail="run not found")
+        return {
+            "run_id": run_id,
+            "exchanges": [e.to_dict() for e in state.events if e.type == "http_exchange"],
+        }
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(run_id: str, request: Request):

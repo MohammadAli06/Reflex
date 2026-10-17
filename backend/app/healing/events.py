@@ -9,9 +9,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from .exchange import REDACTED, is_sensitive_key, redact as redact_value  # single reusable redaction
+
 EVENT_TYPES = {
     "run_started",
     "task_started",
+    "http_exchange",
     "call_attempt",
     "error_detected",
     "error_classified",
@@ -30,11 +33,14 @@ EVENT_TYPES = {
     "run_finished",
 }
 
-_SENSITIVE_KEY_PARTS = ("key", "token", "secret", "authorization", "password", "credential")
-REDACTED = "***redacted***"
-
 
 class Redactor:
+    """Key-name redaction plus planted-secret value masking.
+
+    Key rules live in :func:`healing.exchange.redact` — the one reusable
+    redaction entry point.
+    """
+
     def __init__(self, secret_values: Iterable[str] = ()) -> None:
         self._values: set[str] = {v for v in secret_values if v}
 
@@ -50,16 +56,19 @@ class Redactor:
         return out
 
     def redact(self, obj: Any) -> Any:
+        return redact_value(obj) if not self._values else self._redact_with_values(obj)
+
+    def _redact_with_values(self, obj: Any) -> Any:
         if isinstance(obj, dict):
             result = {}
             for key, value in obj.items():
-                if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS):
-                    result[key] = REDACTED if value not in (None, {}, []) else value
+                if is_sensitive_key(key) and value not in (None, [], {}):
+                    result[key] = REDACTED
                 else:
-                    result[key] = self.redact(value)
+                    result[key] = self._redact_with_values(value)
             return result
         if isinstance(obj, list):
-            return [self.redact(v) for v in obj]
+            return [self._redact_with_values(v) for v in obj]
         if isinstance(obj, str):
             return self.redact_text(obj)
         return obj

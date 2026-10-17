@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, ApiError } from '../api/client'
 import { useApi } from '../hooks/useApi'
 import { PageHead, Panel } from '../components/console'
@@ -10,45 +10,14 @@ import {
   IconPlay,
   IconRefresh,
 } from '../components/ui/Icons'
-import type { ConsistencyResult, ErrorStyle, JSONSchema, SchemaResponse } from '../types'
+import type { ConsistencyResult, ErrorStyle, MutateResult, MutationInfo } from '../types'
+import { DASH } from '../utils/format'
 
 const ERROR_STYLES: ErrorStyle[] = ['clear', 'vague', 'none']
 const HELPERS: Record<ErrorStyle, string> = {
   clear: 'Detailed 4xx with field-level JSON schema validation hints.',
   vague: 'Generic rejection with an opaque message and no field paths.',
   none: 'Silent rejection with an empty error body.',
-}
-
-const COMMON_MUTATIONS = [
-  { id: 'M_RENAME', label: 'Rename field', desc: 'Rename request field user_id to uid' },
-  { id: 'M_TYPE', label: 'Change type', desc: 'Change user_id type from string to integer' },
-  { id: 'M_NEST', label: 'Nest field', desc: 'Move user_id into nested target.id object' },
-  { id: 'M_HEADER', label: 'Add header', desc: 'Require credential header X-Tenant-Token' },
-  { id: 'M_NEST_TYPE_HEADER', label: 'Combined PS demo', desc: 'Nesting + type change + new header together' },
-]
-
-// Baseline canonical schema (v1)
-const INITIAL_BASELINE_SCHEMA: Record<string, unknown> = {
-  request_schemas: {
-    '/user/fetch': {
-      type: 'object',
-      properties: {
-        user_id: { type: 'string', description: 'Identifier of the user to fetch' },
-      },
-      required: ['user_id'],
-      additionalProperties: false,
-    },
-    '/user/update': {
-      type: 'object',
-      properties: {
-        user_id: { type: 'string', description: 'Identifier of the user to update' },
-        display_name: { type: 'string', description: 'New display name' },
-      },
-      required: ['display_name', 'user_id'],
-      additionalProperties: false,
-    },
-  },
-  required_headers: [],
 }
 
 /** Compute simple line diff for side-by-side JSON panels */
@@ -78,24 +47,8 @@ export function SchemaPage() {
   const [message, setMessage] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const [consistency, setConsistency] = useState<ConsistencyResult | null>(null)
-
-  // Store previous schema before mutation was applied
-  const [previousSchema, setPreviousSchema] = useState<SchemaResponse | null>(null)
-
-  useEffect(() => {
-    if (schema.data && !previousSchema && schema.data.version > 1) {
-      // If active schema is already mutated, use baseline as before
-      setPreviousSchema({
-        version: 1,
-        sha256: 'initial-baseline-hash',
-        short_hash: 'v1-base',
-        request_schemas: INITIAL_BASELINE_SCHEMA.request_schemas as Record<string, JSONSchema>,
-        required_headers: [],
-        response_schemas: {},
-        error_style: 'clear',
-      })
-    }
-  }, [schema.data])
+  // Specs recorded by the last real mutation (real mock OpenAPI, not fabricated).
+  const [lastApply, setLastApply] = useState<MutateResult | null>(null)
 
   async function run(action: () => Promise<ConsistencyResult>, note: string) {
     setBusy(true)
@@ -105,6 +58,7 @@ export function SchemaPage() {
       const result = await action()
       setConsistency(result)
       setMessage(note)
+      setLastApply(null)
       schema.reload()
     } catch (err) {
       setMessage(`Failed: ${err instanceof ApiError ? err.message : String(err)}`)
@@ -119,16 +73,15 @@ export function SchemaPage() {
     setMessage(null)
     setFailed(false)
     try {
-      if (schema.data) {
-        setPreviousSchema(schema.data)
-      }
       const result = await api.mutate(selected, errorStyle)
       setConsistency(result.consistency)
+      setLastApply(result)
       setMessage(`Successfully applied mutation: ${selected}. Schema updated to v${result.version}.`)
       schema.reload()
     } catch (err) {
       setMessage(`Failed to mutate schema: ${err instanceof ApiError ? err.message : String(err)}`)
       setFailed(true)
+      schema.reload()
     } finally {
       setBusy(false)
     }
@@ -139,24 +92,27 @@ export function SchemaPage() {
 
   const data = schema.data!
 
-  // Prepare before and after line arrays
-  const beforeObj = previousSchema
+  const mutationList: MutationInfo[] = mutations.data?.mutations ?? []
+
+  const beforeObj = lastApply?.spec_before
     ? {
-        version: previousSchema.version,
-        required_headers: previousSchema.required_headers,
-        request_schemas: previousSchema.request_schemas,
+        version: lastApply.spec_before.version ?? DASH,
+        required_headers: lastApply.spec_before.required_headers ?? [],
+        request_schemas: lastApply.spec_before.request_schemas ?? {},
+      }
+    : null
+
+  const afterObj = lastApply?.spec_after
+    ? {
+        version: lastApply.spec_after.version ?? DASH,
+        required_headers: lastApply.spec_after.required_headers ?? [],
+        request_schemas: lastApply.spec_after.request_schemas ?? {},
       }
     : {
-        version: 1,
-        required_headers: [],
-        request_schemas: INITIAL_BASELINE_SCHEMA.request_schemas,
+        version: data.version,
+        required_headers: data.required_headers,
+        request_schemas: data.request_schemas,
       }
-
-  const afterObj = {
-    version: data.version,
-    required_headers: data.required_headers,
-    request_schemas: data.request_schemas,
-  }
 
   const beforeLines = JSON.stringify(beforeObj, null, 2).split('\n')
   const afterLines = JSON.stringify(afterObj, null, 2).split('\n')
@@ -231,15 +187,16 @@ export function SchemaPage() {
 
         <div className="text-label" style={{ marginBottom: 8 }}>Change to apply</div>
         <div role="radiogroup" aria-label="Schema change" style={{ display: 'flex', flexDirection: 'column', border: '1px solid var(--hairline)', borderRadius: 'var(--radius)', overflow: 'hidden', marginBottom: 20 }}>
-          {COMMON_MUTATIONS.map((m, i) => {
-            const isSelected = selected === m.id
+          {mutationList.map((m, i) => {
+            const MUT = m as unknown as { id: string; label?: string; description?: string }
+            const isSelected = selected === MUT.id
             return (
               <button
-                key={m.id}
+                key={MUT.id}
                 type="button"
                 role="radio"
                 aria-checked={isSelected}
-                onClick={() => setSelected(m.id)}
+                onClick={() => setSelected(MUT.id)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -269,15 +226,24 @@ export function SchemaPage() {
                   {isSelected && <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--brand)' }} />}
                 </span>
                 <span style={{ flex: 1 }}>
-                  <span style={{ display: 'block', fontWeight: 600, fontSize: 13, color: 'var(--ink, #ffffff)' }}>{m.label}</span>
-                  <span className="text-muted" style={{ display: 'block', fontSize: 12, color: 'var(--muted, #a8a29a)' }}>{m.desc}</span>
+                  <span style={{ display: 'block', fontWeight: 600, fontSize: 13, color: 'var(--ink, #ffffff)' }}>
+                    {MUT.label || MUT.id}
+                  </span>
+                  <span className="text-muted" style={{ display: 'block', fontSize: 12, color: 'var(--muted, #a8a29a)' }}>
+                    {MUT.description || 'No description recorded for this mutation.'}
+                  </span>
                 </span>
-                {m.id === 'M_NEST_TYPE_HEADER' && (
+                {MUT.id === 'M_NEST_TYPE_HEADER' && (
                   <span className="text-muted" style={{ fontSize: 11, whiteSpace: 'nowrap', color: 'var(--muted, #a8a29a)' }}>Recommended</span>
                 )}
               </button>
             )
           })}
+          {mutationList.length === 0 && (
+            <button type="button" style={{ padding: 16, border: 'none', background: 'var(--surface)', color: 'var(--text-muted)', textAlign: 'left' }}>
+              Mutations unavailable ({DASH}) — the backend list could not be loaded.
+            </button>
+          )}
         </div>
 
         <div
@@ -316,11 +282,18 @@ export function SchemaPage() {
 
       <Panel
         title={
-          <div className="con-row" style={{ gap: 10 }}>
+          <div className="con-row" style={{ gap: 10, flexWrap: 'wrap' }}>
             <span>Before and after</span>
-            <span className="font-mono text-muted" style={{ fontSize: 12 }}>
-              v{beforeObj.version} → v{afterObj.version}
-            </span>
+            {beforeObj ? (
+              <span className="font-mono text-muted" style={{ fontSize: 12 }}>
+                v{String(beforeObj.version)} → v{String(afterObj.version)}
+                {lastApply?.mutation?.id ? ` · ${lastApply.mutation.id}` : ''}
+              </span>
+            ) : (
+              <span className="font-mono text-muted" style={{ fontSize: 12 }}>
+                current v{String(afterObj.version)}
+              </span>
+            )}
           </div>
         }
         actions={
@@ -330,6 +303,12 @@ export function SchemaPage() {
           </div>
         }
       >
+        {!beforeObj ? (
+          <EmptyState
+            message="No recorded before spec for this session."
+            hint="Apply a mutation here and the real mock OpenAPI contract taken before and after the change is shown. The page never invents a baseline."
+          />
+        ) : (
         <div className="con-grid-2">
           <div
             className="card"
@@ -348,7 +327,7 @@ export function SchemaPage() {
                 alignItems: 'center',
               }}
             >
-              <span style={{ fontWeight: 600, fontSize: 13 }}>Current schema (v{beforeObj.version})</span>
+              <span style={{ fontWeight: 600, fontSize: 13 }}>Schema before (v{beforeObj.version})</span>
               <span className="text-muted font-mono" style={{ fontSize: 11 }}>Removed lines in red</span>
             </div>
 
@@ -394,7 +373,7 @@ export function SchemaPage() {
               }}
             >
               <span style={{ fontWeight: 600, fontSize: 13 }}>
-                Changed schema (v{afterObj.version})
+                Schema after (v{afterObj.version})
               </span>
               <span className="text-muted font-mono" style={{ fontSize: 11 }}>Added lines in green</span>
             </div>
@@ -418,11 +397,12 @@ export function SchemaPage() {
                     </span>
                     <span>{item.text}</span>
                   </div>
-                ))}
-              </pre>
-            </div>
-          </div>
-        </div>
+                 ))}
+               </pre>
+             </div>
+           </div>
+         </div>
+        )}
       </Panel>
 
       <Panel

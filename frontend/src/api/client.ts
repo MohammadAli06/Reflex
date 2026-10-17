@@ -4,6 +4,7 @@ import type {
   ConsistencyResult,
   EvaluationConfig,
   MetricsResponse,
+  MutateResult,
   MutationInfo,
   RealWorldResponse,
   RunSummary,
@@ -15,6 +16,7 @@ import type {
   StatusResponse,
   TamperResult,
   ErrorStyle,
+  TraceEvent,
 } from '../types'
 
 const BASE = '/api'
@@ -66,7 +68,7 @@ export const api = {
   cases: () => request<{ cases: CaseInfo[] }>('/cases'),
   consistency: () => request<ConsistencyResult>('/consistency'),
   mutate: (mutationId: string, errorStyle?: ErrorStyle) =>
-    request<{ version: number; consistency: ConsistencyResult }>('/mutate', {
+    request<MutateResult>('/mutate', {
       method: 'POST',
       body: JSON.stringify({ mutation_id: mutationId, error_style: errorStyle }),
     }),
@@ -75,6 +77,8 @@ export const api = {
     request<RunSummary>('/runs', { method: 'POST', body: JSON.stringify({ case_ids: caseIds, repeats }) }),
   listRuns: () => request<{ runs: RunSummary[] }>('/runs'),
   getRun: (runId: string) => request<RunSummary>(`/runs/${runId}`),
+  listExchanges: (runId: string) =>
+    request<{ run_id: string; exchanges: TraceEvent[] }>(`/runs/${runId}/exchanges`),
   audit: (params?: { outcome?: string; runId?: string; limit?: number }) => {
     const search = new URLSearchParams()
     if (params?.outcome) search.set('outcome', params.outcome)

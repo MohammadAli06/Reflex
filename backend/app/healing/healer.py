@@ -16,6 +16,7 @@ import httpx
 
 from ..audit.audit_log import AuditEntry, AuditLog
 from ..config import Settings
+from ..healing.exchange import build_call_exchange
 from ..registry.executor import (
     CallResult,
     Executor,
@@ -121,6 +122,7 @@ class Healer:
             self._schema_client,
             pinned_public_key=key,
             require_signature=self._settings.schema_signing_enabled and bool(key),
+            exchange_sink=lambda exchange: self._emitter.emit("http_exchange", **exchange),
         )
 
     def _refuse_untrusted(self, outcome: "HealOutcome", definition: ToolDefinition,
@@ -221,6 +223,9 @@ class Healer:
                      header_names=sorted(prepared.headers))
         outcome.attempts += 1
         result = self._executor.call(prepared)
+        emitter.emit("http_exchange", **build_call_exchange(
+            step="healing_call", base_url=self._executor.base_url(),
+            prepared=prepared, result=result, attempt=outcome.attempts))
 
         while True:
             if result.ok:
@@ -356,6 +361,7 @@ class Healer:
 
                 # Apply with compare-and-swap.
                 old_def_dict = definition.to_dict()
+                old_revision = definition.revision
                 try:
                     definition = self._registry.apply(
                         definition.name, definition.revision, patched_def
@@ -368,6 +374,7 @@ class Healer:
 
                 patched_once = True
                 emitter.emit("patch_applied", tool=definition.name, revision=definition.revision,
+                             revision_before=old_revision,
                              conversions=patch.conversions, header_names=[h["name"] for h in definition.required_headers])
                 self._record_audit(definition, "applied", None,
                                    verified_version=verified.version,
@@ -386,6 +393,9 @@ class Healer:
                     return outcome
                 outcome.attempts += 1
                 result = self._executor.call(prepared)
+                emitter.emit("http_exchange", **build_call_exchange(
+                    step="retry_call", base_url=self._executor.base_url(),
+                    prepared=prepared, result=result, attempt=outcome.attempts))
                 continue
 
             if category is Category.INFRA:
@@ -407,6 +417,9 @@ class Healer:
                 time.sleep(BACKOFF_S)
                 outcome.attempts += 1
                 result = self._executor.call(prepared)
+                emitter.emit("http_exchange", **build_call_exchange(
+                    step="infra_retry", base_url=self._executor.base_url(),
+                    prepared=prepared, result=result, attempt=outcome.attempts))
                 continue
 
             # RATE_LIMIT and OTHER -> report as not drift, no patch.
@@ -463,13 +476,15 @@ class Healer:
                 outcome.final_result = result
                 return outcome
             if check.adapted_map and check.adapted_map != definition.response_map:
+                before_revision = definition.revision
                 try:
                     definition = self._registry.apply(
                         definition.name, definition.revision,
                         definition.copy_with(response_map=check.adapted_map),
                     )
                     emitter.emit("patch_applied", tool=definition.name,
-                                 revision=definition.revision, response_map=check.adapted_map)
+                                 revision=definition.revision, revision_before=before_revision,
+                                 response_map=check.adapted_map)
                 except Exception:
                     pass
             data = check.data

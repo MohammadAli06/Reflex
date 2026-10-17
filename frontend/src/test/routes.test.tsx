@@ -217,7 +217,7 @@ describe('Runs page', () => {
     expect(within(card).getByText('0.90')).toBeInTheDocument()
     // Short schema hash sliced from the recorded sha256, not invented.
     expect(within(card).getByText('aaaaaaaa')).toBeInTheDocument()
-    expect(within(card).getByText('No original definition recorded.')).toBeInTheDocument()
+    expect(card.querySelectorAll('.state-empty').length).toBeGreaterThan(0)
   })
 
   it('states explicitly when a run has no recorded decision', async () => {

@@ -15,6 +15,7 @@ from ..healing.secrets import SecretsProvider
 from ..registry.executor import Executor
 from ..registry.tasks import Task
 from ..registry.tool_registry import ToolRegistry
+from ..registry.tools import definition_snapshot
 from .base import AgentRunResult
 
 
@@ -45,7 +46,9 @@ class HealingAgent:
 
     def run(self, task: Task, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
         emitter = emitter or EventEmitter(run_id, "healing")
-        emitter.emit("run_started", agent="healing", task_id=task.id, tool=task.tool)
+        definition = self._registry.get(task.tool)
+        emitter.emit("run_started", agent="healing", task_id=task.id, tool=task.tool,
+                     tool_definition=definition_snapshot(definition))
         emitter.emit("task_started", task_id=task.id, args=task.args, write=task.write)
 
         healer = Healer(

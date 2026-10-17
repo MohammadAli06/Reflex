@@ -14,6 +14,7 @@ import httpx
 
 from ..config import Settings
 from ..healing.events import EventEmitter
+from ..healing.exchange import build_call_exchange, build_exchange
 from ..llm.base import LLMClient
 from ..registry.executor import (
     CallResult,
@@ -25,7 +26,7 @@ from ..registry.executor import (
 from ..healing.secrets import SecretsProvider
 from ..registry.tasks import Task
 from ..registry.tool_registry import ToolRegistry
-from ..registry.tools import ToolDefinition
+from ..registry.tools import ToolDefinition, definition_snapshot
 from .base import AgentRunResult
 
 FETCH_SCHEMA_TOOL = {
@@ -55,10 +56,22 @@ class BaselineAgent:
             name: registry.get(name) for name in registry.list_names()
         }
 
-    def _schema_text(self) -> str:
+    def _schema_text(self, emitter: EventEmitter | None = None) -> str:
+        started = time.perf_counter()
+        url = str(self._schema_client.base_url).rstrip("/") + "/openapi.json"
         try:
-            return self._schema_client.get("/openapi.json", timeout=5.0).text
-        except Exception:
+            text = self._schema_client.get("/openapi.json", timeout=5.0).text
+            if emitter is not None:
+                emitter.emit("http_exchange", **build_exchange(
+                    step="schema_probe", method="GET", url=url,
+                    response_status=200, response_body=text[:800],
+                    duration_s=time.perf_counter() - started))
+            return text
+        except Exception as exc:
+            if emitter is not None:
+                emitter.emit("http_exchange", **build_exchange(
+                    step="schema_probe", method="GET", url=url, error=str(exc),
+                    duration_s=time.perf_counter() - started))
             return ""
 
     def _tool_schema(self, definition: ToolDefinition) -> dict[str, Any]:
@@ -70,10 +83,11 @@ class BaselineAgent:
 
     def run(self, task: Task, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
         emitter = emitter or EventEmitter(run_id, "baseline")
-        emitter.emit("run_started", agent="baseline", task_id=task.id, tool=task.tool)
+        definition = self._frozen[task.tool]
+        emitter.emit("run_started", agent="baseline", task_id=task.id, tool=task.tool,
+                     tool_definition=definition_snapshot(definition))
         emitter.emit("task_started", task_id=task.id, args=task.args, write=task.write)
 
-        definition = self._frozen[task.tool]
         tokens_in = tokens_out = 0
         attempts = 0
         t_break: float | None = None
@@ -90,6 +104,9 @@ class BaselineAgent:
             emitter.emit("call_attempt", endpoint=definition.endpoint, body=prepared.body)
             attempts += 1
             result = self._executor.call(prepared)
+            emitter.emit("http_exchange", **build_call_exchange(
+                step="baseline_call", base_url=self._executor.base_url(),
+                prepared=prepared, result=result, attempt=attempts))
             if result.ok:
                 return self._success(definition, result, task, emitter, attempts, t_break,
                                      tokens_in, tokens_out)
