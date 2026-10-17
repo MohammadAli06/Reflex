@@ -24,7 +24,9 @@ class LLMResult:
     output_tokens: int = 0
     latency_s: float = 0.0
     model: str = ""
-    tokens_reported: bool = True
+    # True ONLY when the LLM API supplied real usage metadata.
+    # Conservative default: assume unverified unless explicitly confirmed.
+    tokens_reported: bool = False
 
     @property
     def total_tokens(self) -> int:

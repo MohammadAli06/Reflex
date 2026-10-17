@@ -35,7 +35,13 @@ def _record_for(
         agent=result.agent,
         framework="plain-loop" if result.agent == "baseline" else "rule-based-healer",
         error_style=case.error_style,
-        mutation_ids=[case.mutation_id] if case.mutation_id else [],
+        mutation_ids=(
+            list(case.composed_mutations)
+            if case.composed_mutations
+            else ([case.mutation_id] if case.mutation_id
+            else ([case.change_kind] if case.source == "real" and case.change_kind
+            else []))
+        ),
         split=case.split,
         repeat=repeat,
         attempts=result.attempts,
@@ -56,6 +62,7 @@ def _record_for(
         expected_reason=case.expected_reason,
         source=case.source,
         seed=case.seed,
+        tokens_reported=result.tokens_reported,
     )
 
 

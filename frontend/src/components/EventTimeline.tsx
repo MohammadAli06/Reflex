@@ -18,7 +18,7 @@ const LABELS: Record<string, string> = {
   run_started: 'Run started',
   task_started: 'Task started',
   call_attempt: 'Request sent',
-  error_detected: 'Request failed (422)',
+  error_detected: 'Request failed',
   error_classified: 'Failure diagnosed',
   schema_fetched: 'Schema fetched',
   schema_diff: 'Schema changes found',
@@ -33,6 +33,20 @@ const LABELS: Record<string, string> = {
   response_check: 'Response checked',
   not_drift: 'Not schema drift',
   run_finished: 'Run finished',
+}
+
+function getEventLabel(ev: TraceEvent): string {
+  if (ev.type === 'error_detected') {
+    const status = ev.data?.status
+
+    if (typeof status === 'number') {
+      return `Request failed (${status})`
+    }
+
+    return 'Request failed'
+  }
+
+  return LABELS[ev.type] ?? ev.type
 }
 
 function getEventIcon(type: string) {
@@ -154,7 +168,7 @@ function EventRow({ ev, t0 }: { ev: TraceEvent; t0: number }) {
         </span>
         <span className="con-row" style={{ gap: 6 }}>
           <span style={{ color: 'var(--text-muted)' }}>{getEventIcon(ev.type)}</span>
-          <span className="tl-title">{LABELS[ev.type] ?? ev.type}</span>
+          <span className="tl-title">{getEventLabel(ev)}</span>
         </span>
         {isRefusal && <span className="badge badge-warning">Refused</span>}
         {isVerified && <span className="badge badge-success">Verified</span>}

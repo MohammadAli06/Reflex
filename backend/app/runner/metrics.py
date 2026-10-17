@@ -1,5 +1,17 @@
 """Fixed metric formulas (PRD §9). Empty data -> ``available: false``.
 
+ZTAR (Zero-Touch Adaptation Rate) denominator rule
+---------------------------------------------------
+Only records that represent a *breaking schema mutation* count toward ZTAR.
+A record is eligible when **both** hold:
+  1. ``expected_outcome == "recovered"``  (the case was meant to be recoverable)
+  2. A breaking schema change was applied: ``mutation_ids`` is non-empty,
+     or ``source == "real"`` (reviewed OpenAPI schema drift)
+
+Ordinary baseline health-checks (e.g. ``normal_fetch`` with no mutation) pass
+the first condition but not the second. Counting them would inflate ZTAR
+because an already-working call requires no adaptation at all.
+
 Proportions (ZTAR, correct-refusal rate) carry a Wilson 95% score interval so a
 small sample is never read as a precise rate.
 """
@@ -67,7 +79,14 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
     if not records:
         return {"available": False}
 
-    recoverable = [r for r in records if r.expected_outcome == "recovered"]
+    # ZTAR denominator: only genuine breaking-schema mutations count.
+    # A record with no mutation_ids is a no-break health-check (unless source="real");
+    # admitting normal_fetch would inflate ZTAR by crediting a trivially
+    # successful call as an adaptation.
+    recoverable = [
+        r for r in records
+        if r.expected_outcome == "recovered" and (bool(r.mutation_ids) or r.source == "real")
+    ]
     recovered = [r for r in recoverable if r.outcome == "recovered" and r.correct is not False]
     ztar = (len(recovered) / len(recoverable)) if recoverable else None
 
@@ -102,6 +121,9 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
         "tokens_total": total_tokens,
         "schema_attempts": sum(r.schema_attempts for r in records),
         "infra_retries": sum(r.infra_retries for r in records),
+        # True only when EVERY record carries confirmed provider usage metadata.
+        # Conservative fallback: missing field → False (unverified), not True.
+        "tokens_reported": all(getattr(r, "tokens_reported", False) for r in records),
     }
 
 

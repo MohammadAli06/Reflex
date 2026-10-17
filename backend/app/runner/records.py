@@ -35,6 +35,11 @@ class RunRecord:
     expected_reason: str | None = None
     source: str = "synthetic"  # synthetic | real | fuzz
     seed: int | None = None
+    # Conservative provenance flag.  True ONLY when genuine provider usage
+    # metadata was received from the LLM API (e.g. Gemini usage_metadata).
+    # Defaults to False: missing or unknown provenance is never treated as
+    # verified.  FakeLLMClient explicitly sets this to False.
+    tokens_reported: bool = False
 
     @property
     def mttr(self) -> float | None:
@@ -47,4 +52,13 @@ class RunRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RunRecord":
-        return cls(**data)
+        """Deserialize from a plain dict (JSON row).
+
+        Older records written before ``tokens_reported`` was introduced will not
+        have the field. We must default to ``False`` (unverified), not ``True``,
+        to avoid silently presenting simulated counts as genuine measurements.
+        """
+        d = dict(data)  # shallow copy so we don't mutate the caller's dict
+        # Pop then re-insert with a safe default so unknown provenance stays False.
+        d["tokens_reported"] = bool(d.get("tokens_reported", False))
+        return cls(**d)

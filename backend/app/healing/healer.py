@@ -33,7 +33,7 @@ from .events import EventEmitter
 from .hypothesize import CandidatePatch, apply_patch_to_definition, hypothesize
 from .response_check import check_response
 from .schema_diff import diff_schemas
-from .schema_fetch import UntrustedSchemaError, fetch_verified
+from .schema_fetch import UntrustedSchemaError, VerifiedSchema, fetch_verified
 from .secrets import SecretsProvider
 from .validate import validate_patch
 

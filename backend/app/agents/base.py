@@ -23,7 +23,9 @@ class AgentRunResult:
     response_data: dict[str, Any] | None = None
     error_text: str = ""
     model: str = ""
-    tokens_reported: bool = True
+    # Conservative provenance: True only when the LLM API supplied real usage
+    # metadata, or zero LLM calls were made (0 is an exact measurement).
+    tokens_reported: bool = False
 
     @property
     def tokens_total(self) -> int:

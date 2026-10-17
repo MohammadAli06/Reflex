@@ -257,11 +257,19 @@ export function ResultsPage() {
 
         <StatCard
           label="Token overhead"
-          value={num(heal.tokens_total)}
+          value={
+            heal.tokens_reported === false
+              ? 'N/A'
+              : num(heal.tokens_total)
+          }
           hint={
-            <span>
-              Baseline: {num(base.tokens_total)} tokens
-            </span>
+            heal.tokens_reported === false ? (
+              <span>Token counts are simulated (fake LLM client) — not real provider usage</span>
+            ) : (
+              <span>
+                Baseline: {num(base.tokens_total)} tokens
+              </span>
+            )
           }
           icon={<IconBarChart size={18} />}
         />
@@ -295,6 +303,30 @@ export function ResultsPage() {
           Every metric below is computed from <b>n = {num(data.n_records)} recorded runs</b>. Refusals are excluded from recovery-time averages.
         </span>
       </div>
+
+      {(() => {
+        const splits = Object.keys(data.agents?.healing?.by_split ?? {})
+        const hasMultipleSplits = splits.length > 1
+        return hasMultipleSplits ? (
+          <div
+            className="con-row"
+            style={{
+              background: 'var(--warning-soft, #3d2e0a)',
+              border: '1px solid var(--warning-border, #7a5c14)',
+              borderRadius: 'var(--radius)',
+              padding: '10px 16px',
+              fontSize: 13,
+              gap: 8,
+              color: 'var(--warning-strong)',
+            }}
+          >
+            <IconInfo size={16} />
+            <span>
+              Headline metrics combine <b>{splits.join(' + ')}</b> splits. The overall ZTAR is <b>not</b> a held-out score — see <b>Results by evaluation split</b> below for separate figures.
+            </span>
+          </div>
+        ) : null
+      })()}
 
       <Panel
         title="Baseline vs Reflex scorecard"
@@ -347,10 +379,20 @@ export function ResultsPage() {
               />
               <TableRow
                 metric="Total tokens used"
-                base={num(base.tokens_total)}
-                heal={num(heal.tokens_total)}
+                base={
+                  base.tokens_reported !== true
+                    ? <span className="text-muted" style={{ fontStyle: 'italic' }}>N/A (unverified)</span>
+                    : num(base.tokens_total)
+                }
+                heal={
+                  heal.tokens_reported !== true
+                    ? <span className="text-muted" style={{ fontStyle: 'italic' }}>N/A (unverified)</span>
+                    : num(heal.tokens_total)
+                }
                 delta={
-                  base.tokens_total
+                  base.tokens_reported !== true || heal.tokens_reported !== true
+                    ? '—'
+                    : base.tokens_total
                     ? String(Math.max(0, (base.tokens_total ?? 0) - (heal.tokens_total ?? 0)))
                     : '0'
                 }
@@ -375,6 +417,87 @@ export function ResultsPage() {
           </table>
         </div>
       </Panel>
+
+      {/* --- Per-split breakdown ----------------------------------------- */}
+      {(() => {
+        const healSplits = data.agents?.healing?.by_split ?? {}
+        const baseSplits = data.agents?.baseline?.by_split ?? {}
+        const splitKeys = Object.keys(healSplits)
+        if (splitKeys.length === 0) return null
+        const SPLIT_LABELS: Record<string, string> = {
+          tuning: 'Tuning',
+          held_out: 'Held-out',
+          fuzz: 'Fuzz',
+          real: 'Real-spec',
+        }
+        const SPLIT_NOTES: Record<string, string> = {
+          tuning: 'Cases used during development — not a fair held-out measure',
+          held_out: 'Unseen cases run once — the authoritative ZTAR figure',
+          fuzz: 'Randomly generated mutation compositions',
+          real: 'Mutations derived from real API spec diffs',
+        }
+        return (
+          <Panel
+            title="Results by evaluation split"
+            actions={
+              <span className="text-muted" style={{ fontSize: 12 }}>
+                Each split is computed independently — never combined
+              </span>
+            }
+          >
+            <div className="table-wrap">
+              <table className="ctable">
+                <thead>
+                  <tr>
+                    <th>Split</th>
+                    <th>Baseline ZTAR</th>
+                    <th>Reflex ZTAR</th>
+                    <th>Recovered / Eligible</th>
+                    <th>Correct refusals</th>
+                    <th>Wrong patches</th>
+                    <th style={{ textAlign: 'right' }}>Failures</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {splitKeys.map((split) => {
+                    const h = healSplits[split]
+                    const b = baseSplits[split]
+                    const note = SPLIT_NOTES[split] ?? split
+                    const label = SPLIT_LABELS[split] ?? split
+                    return (
+                      <tr key={split}>
+                        <td>
+                          <b>{label}</b>
+                          <br />
+                          <span className="text-muted" style={{ fontSize: 11 }}>{note}</span>
+                        </td>
+                        <td className="font-mono text-muted">
+                          {b?.ztar != null ? pct(b.ztar) : <span className="text-muted">—</span>}
+                        </td>
+                        <td className="con-accent font-mono" style={{ fontWeight: 600 }}>
+                          {h?.ztar != null ? pct(h.ztar) : <span className="text-muted">—</span>}
+                        </td>
+                        <td className="font-mono text-muted">
+                          {h?.recovered ?? 0} / {h?.recoverable ?? 0}
+                        </td>
+                        <td className="font-mono text-muted">{num(h?.correct_refusals)}</td>
+                        <td className="font-mono">
+                          <span style={{ color: (h?.wrong_patches ?? 0) > 0 ? 'var(--brand-text, #e08073)' : 'inherit' }}>
+                            {num(h?.wrong_patches)}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'right' }} className="font-mono text-muted">
+                          {num(h?.failures)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+        )
+      })()}
 
       <Panel
         title="Adaptation by error style"
@@ -497,7 +620,15 @@ export function ResultsPage() {
                     <td className="text-muted font-mono">{num(summary.n)}</td>
                     <td className="con-accent font-mono" style={{ fontWeight: 600 }}>{pct(summary.ztar)}</td>
                     <td className="font-mono">{secs(summary.mttr_median)}</td>
-                    <td style={{ textAlign: 'right' }} className="font-mono text-muted">{num(summary.tokens_total)}</td>
+                    <td style={{ textAlign: 'right' }} className="font-mono text-muted">
+                          {path === 'rule' ? (
+                            <span title="Rule-based repair uses no LLM calls — 0 tokens is expected">0 ✓</span>
+                          ) : summary.tokens_reported === false ? (
+                            <span style={{ fontStyle: 'italic' }}>N/A (simulated)</span>
+                          ) : (
+                            num(summary.tokens_total)
+                          )}
+                        </td>
                   </tr>
                 ))}
               </tbody>

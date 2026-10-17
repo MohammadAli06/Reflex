@@ -107,6 +107,12 @@ export interface RunRecord {
   expected_reason: string | null
   source?: string
   seed?: number | null
+  /**
+   * True ONLY when genuine provider usage metadata was returned by the LLM API.
+   * Absent/undefined means unverified — treat the same as false.
+   * Never display token counts as real when this is not explicitly true.
+   */
+  tokens_reported?: boolean
 }
 
 export interface RunSummary {
@@ -160,6 +166,11 @@ export interface MetricSummary {
   tokens_total?: number
   schema_attempts?: number
   infra_retries?: number
+  /**
+   * True ONLY when every record in this group carried confirmed provider usage metadata.
+   * Absent/undefined means unverified — treat the same as false.
+   */
+  tokens_reported?: boolean
 }
 
 export interface AgentMetrics {

@@ -75,6 +75,8 @@ class BaselineAgent:
 
         definition = self._frozen[task.tool]
         tokens_in = tokens_out = 0
+        tokens_reported = True  # True = no LLM called yet (0 is an exact measurement)
+                                # Flipped to False if any FakeLLMClient call is made.
         attempts = 0
         t_break: float | None = None
         max_attempts = self._settings.max_schema_attempts
@@ -92,7 +94,7 @@ class BaselineAgent:
             result = self._executor.call(prepared)
             if result.ok:
                 return self._success(definition, result, task, emitter, attempts, t_break,
-                                     tokens_in, tokens_out)
+                                     tokens_in, tokens_out, tokens_reported)
             if t_break is None:
                 t_break = time.perf_counter()
             last_error = result.error_summary()
@@ -111,6 +113,8 @@ class BaselineAgent:
             )
             tokens_in += llm_result.input_tokens
             tokens_out += llm_result.output_tokens
+            if not llm_result.tokens_reported:
+                tokens_reported = False
             emitter.emit("retry", attempt=attempts + 1, note="baseline retries the same payload")
 
         emitter.emit("run_finished", agent="baseline", outcome="failed",
@@ -130,10 +134,11 @@ class BaselineAgent:
             healing_path="none",
             error_text=last_error,
             model=self._llm.model,
-            tokens_reported=True,
+            tokens_reported=tokens_reported,
         )
 
-    def _success(self, definition, result, task, emitter, attempts, t_break, tokens_in, tokens_out):
+    def _success(self, definition, result, task, emitter, attempts, t_break, tokens_in, tokens_out,
+                 tokens_reported: bool = True):
         emitter.emit("verified", status=result.status)
         emitter.emit("run_finished", agent="baseline", outcome="recovered", attempts=attempts)
         t_recovery = time.perf_counter()
@@ -149,5 +154,5 @@ class BaselineAgent:
             tokens_output=tokens_out,
             healing_path="none",
             model=self._llm.model,
-            tokens_reported=True,
+            tokens_reported=tokens_reported,
         )

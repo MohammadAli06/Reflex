@@ -68,7 +68,16 @@ function AgentSummaryCard({
         </div>
         <div>
           <dt>Tokens used</dt>
-          <dd>{record ? num(record.tokens_total) : DASH}</dd>
+          <dd>
+            {!record
+              ? DASH
+              : record.healing_path === 'rule'
+              ? <span title="Rule-based repair uses no LLM calls — 0 tokens is an exact measurement">0 (rule-based)</span>
+              : record.tokens_reported !== true
+              ? <span title="Token counts are unverified — either simulated (fake LLM) or provenance unknown"
+                  style={{ fontStyle: 'italic', color: 'var(--muted)' }}>N/A (unverified)</span>
+              : num(record.tokens_total)}
+          </dd>
         </div>
         <div>
           <dt>Repair method</dt>
