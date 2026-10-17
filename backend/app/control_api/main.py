@@ -49,6 +49,7 @@ from .models import (
     DryRunParseRequest,
     LoginRequest,
     MutateRequest,
+    RepairFallbackRequest,
     RollbackRequest,
     RunRequest,
     SDKCallRequest,
@@ -93,6 +94,9 @@ def create_app(
     throttle = RateLimiter()
     breakers = Breakers(policy)
     mock = mock_client or make_guarded_client(settings.mock_api_url, policy, breakers, timeout=5.0)
+    # Runtime flags live in app state so the operator UI can change real
+    # behavior. The value starts from settings and resets on restart.
+    runtime_flags = {"llm_repair_enabled": settings.llm_repair_enabled}
     db_error: str | None = None
     try:
         init_db(settings.database_url)
@@ -125,6 +129,7 @@ def create_app(
         "policy": policy, "throttle": throttle, "breakers": breakers,
         "key_repo": key_repo,
     }
+    app.state.runtime_flags = runtime_flags
     app.state.provenance = {
         "ok": None, "verified_at": None, "version": None, "sha256": None,
         "signature_verified": False, "key_fingerprint": "", "error": None,
@@ -301,10 +306,11 @@ def create_app(
         except Exception:
             return ""
 
-    # The LLM fallback is constructed whenever the flag is on; without an API
-    # key its one attempt refuses with llm_unavailable instead of healing.
+    # The proposer is constructed whenever a provider key exists, so the
+    # repair-fallback toggle can change real behavior at runtime; the gate is
+    # consulted at call time, not at boot.
     repair_proposer = None
-    if settings.llm_repair_enabled:
+    if settings.llm_configured:
         from ..healing.llm_fallback import GeminiRepairProposer
 
         repair_proposer = GeminiRepairProposer(settings)
@@ -315,7 +321,8 @@ def create_app(
                        provenance_sink=record_provenance,
                        provenance_error_sink=record_provenance_failure,
                        mock_public_key=resolved_public_key(),
-                       repair_proposer=repair_proposer)
+                       repair_proposer=repair_proposer,
+                       llm_gate=lambda: runtime_flags["llm_repair_enabled"])
 
     try:
         revision_repo.seed_initial(_initial_tool_dicts())
@@ -399,7 +406,7 @@ def create_app(
             # Repair policy: safe, non-secret values the settings page reports.
             "llm_model": settings.llm_model,
             "llm_thinking_level": settings.llm_thinking_level,
-            "llm_repair_enabled": settings.llm_repair_enabled,
+            "llm_repair_enabled": runtime_flags["llm_repair_enabled"],
             "max_schema_attempts": settings.max_schema_attempts,
             "max_infra_retries": settings.max_infra_retries,
             "schema_signing_enabled": settings.schema_signing_enabled,
@@ -407,6 +414,37 @@ def create_app(
             "spec_watch_interval_s": settings.spec_watch_interval_s,
             "persistence_error": app.state.db_error,
         }
+
+    @app.post("/api/settings/repair-fallback")
+    async def settings_repair_fallback(payload: RepairFallbackRequest):
+        """Operator toggle for the LLM repair fallback.
+
+        This changes REAL runtime behavior: the healer and the dry-run consult
+        the runtime flag before contacting the provider. Audited BEFORE the
+        change is applied (fail-closed). The value is runtime-only: a restart
+        resets it to the ``LLM_REPAIR_ENABLED`` setting.
+        """
+        previous = runtime_flags["llm_repair_enabled"]
+        if previous == payload.enabled:
+            return {"llm_repair_enabled": previous, "changed": False}
+        try:
+            audit.append(AuditEntry(
+                run_id="", tool="settings/llm_repair",
+                error={"summary": f"repair fallback {previous} -> {payload.enabled}"},
+                classification="settings_change", schema_version_before=None,
+                schema_version_after=None, schema_sha256="", old_definition=None,
+                new_definition=None,
+                evidence=[f"operator set repair fallback: {previous} -> {payload.enabled}"],
+                confidence=0.0, outcome="applied",
+                reason_code="repair_fallback_changed", healing_path="security",
+            ))
+            runtime_flags["llm_repair_enabled"] = payload.enabled
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"audit write failed; setting unchanged: {exc}",
+            )
+        return {"llm_repair_enabled": payload.enabled, "changed": True}
 
     @app.get("/api/schema")
     async def schema():
@@ -929,7 +967,7 @@ def create_app(
         """What WOULD Reflex do here? Pure pipeline, zero persistence, zero calls."""
         from ..dryrun import engine as dryrun_engine
 
-        proposer = repair_proposer  # gate lives inside the healer logic
+        proposer = repair_proposer if runtime_flags["llm_repair_enabled"] else None
         try:
             result = dryrun_engine.analyze(
                 old_spec_text=payload.old_spec,

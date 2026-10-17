@@ -145,6 +145,7 @@ def build_route_roles() -> dict[tuple[str, str], str]:
     _operator("POST", "/api/dryrun/parse")
     _operator("POST", "/api/dryrun/analyze")
     _operator("POST", "/api/registry/rollback")
+    _operator("POST", "/api/settings/repair-fallback")
 
     _sdk("POST", "/api/sdk/call")
     return dict(ROUTE_ROLES)

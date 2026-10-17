@@ -21,3 +21,16 @@ cases:
       repo: widgets
       title: Reflex detects the rename without a restart
       body: The old contract required `title`; the new one requires `summary`.
+
+  - id: stripe_customer_email_rename
+    api: stripe
+    operation: POST /v1/customers
+    old_ref: old
+    new_ref: new
+    change_kind: field_renamed
+    label: recoverable
+    expected_reason: null
+    reviewed: true
+    task_args:
+      email_address: user@example.com
+      full_name: Jane Doe

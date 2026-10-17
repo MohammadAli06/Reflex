@@ -116,18 +116,25 @@ class BaselineAgent:
             emitter.emit("error_detected", status=result.status, error_type=result.error_type,
                          summary=last_error)
             # The baseline may consult the LLM and the schema, but its tool schema is fixed,
-            # so it can only retry the same payload.
-            llm_result = self._llm.generate(
-                messages=[
-                    {"role": "system", "content": "You are a tool-calling agent. Fix the call."},
-                    {"role": "user", "content":
-                        f"Tool {definition.name} failed with: {last_error}. "
-                        f"Current schema: {self._schema_text()[:2000]}"},
-                ],
-                tools=[self._tool_schema(definition), FETCH_SCHEMA_TOOL],
-            )
-            tokens_in += llm_result.input_tokens
-            tokens_out += llm_result.output_tokens
+            # so it can only retry the same payload. A provider failure never
+            # takes the run down: the consult only feeds token accounting, and
+            # the baseline keeps its fixed-schema retry loop regardless.
+            try:
+                llm_result = self._llm.generate(
+                    messages=[
+                        {"role": "system", "content": "You are a tool-calling agent. Fix the call."},
+                        {"role": "user", "content":
+                            f"Tool {definition.name} failed with: {last_error}. "
+                            f"Current schema: {self._schema_text()[:2000]}"},
+                    ],
+                    tools=[self._tool_schema(definition), FETCH_SCHEMA_TOOL],
+                )
+                tokens_in += llm_result.input_tokens
+                tokens_out += llm_result.output_tokens
+            except Exception as exc:  # noqa: BLE001 - provider errors are not run failures
+                emitter.emit("retry", note=f"llm consult failed: {exc}")
+                emitter.emit("retry", attempt=attempts + 1, note="baseline retries the same payload")
+                continue
             emitter.emit("retry", attempt=attempts + 1, note="baseline retries the same payload")
 
         emitter.emit("run_finished", agent="baseline", outcome="failed",

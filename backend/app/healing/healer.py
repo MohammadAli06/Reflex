@@ -115,6 +115,7 @@ class Healer:
         mock_public_key: str = "",
         repair_proposer: RepairProposer | None = None,
         policy=None,
+        llm_gate=None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -128,7 +129,10 @@ class Healer:
         self._provenance_error_sink = provenance_error_sink
         self._mock_public_key = mock_public_key
         self._repair_proposer = repair_proposer
-        self._llm_repair_enabled = settings.llm_repair_enabled
+        if llm_gate is None:
+            self._llm_gate = lambda: settings.llm_repair_enabled
+        else:
+            self._llm_gate = llm_gate
         self._policy = policy or load_security_policy(settings, env={})
 
     def _verified(self) -> "VerifiedSchema":
@@ -232,7 +236,7 @@ class Healer:
         ``FINAL_REFUSAL_CODES`` (lossy conversion, missing values/credentials,
         policy blocks, etc.) is final and never overridden here.
         """
-        if self._repair_proposer is None or not self._llm_repair_enabled:
+        if self._repair_proposer is None or not self._llm_gate():
             return None
         if rule_reason not in rc.LLM_ELIGIBLE_CODES:
             return None

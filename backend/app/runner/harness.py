@@ -44,11 +44,13 @@ class Harness:
         tasks: dict | None = None,
         mock_public_key: str = "",
         repair_proposer=None,
+        llm_gate=None,
     ) -> None:
         self.settings = settings
         self.client = client or httpx.Client(base_url=settings.mock_api_url, timeout=5.0)
         self.llm = llm or build_llm(settings)
         self.repair_proposer = repair_proposer
+        self.llm_gate = llm_gate
         self.secrets = secrets or EnvSecretsProvider(settings)
         self.redactor = Redactor([s.value for s in settings.header_secrets.values()])
         self.audit = audit or AuditLog(settings.audit_log_path, redactor=self.redactor)
@@ -160,6 +162,7 @@ class Harness:
             provenance_error_sink=self._provenance_error_sink,
             mock_public_key=self._mock_public_key,
             repair_proposer=self.repair_proposer,
+            llm_gate=self.llm_gate,
         )
         emitter = emitter or self.make_emitter(run_id, "healing")
         return agent.run(task, run_id, emitter=emitter)
@@ -179,6 +182,7 @@ class Harness:
             provenance_error_sink=self._provenance_error_sink,
             mock_public_key=self._mock_public_key,
             repair_proposer=self.repair_proposer,
+            llm_gate=self.llm_gate,
         )
         emitter = emitter or self.make_emitter(run_id, "healing")
         return agent.run(task, run_id, emitter=emitter)

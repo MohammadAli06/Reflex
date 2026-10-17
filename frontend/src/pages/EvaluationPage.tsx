@@ -162,12 +162,43 @@ export function EvaluationPage() {
   const scoped: MetricSummary | undefined =
     split === 'fuzz' ? healing?.by_source?.fuzz : healing?.by_split?.[split]
 
+  const [running, setRunning] = useState(false)
+
+  async function runCurrentSplit() {
+    const caseIds = selected.map((item) => item.id)
+    if (!caseIds.length) {
+      setFailure('No cases available in this split.')
+      return
+    }
+    setRunning(true)
+    setFailure(null)
+    setNotice(null)
+    try {
+      await api.startRun(caseIds)
+      await Promise.all([cases.reload(), runs.reload(), metrics.reload()])
+      setNotice(`Successfully executed ${caseIds.length} ${split} cases.`)
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRunning(false)
+    }
+  }
+
   return (
     <div className="con-page">
       <PageHead
         eyebrow={<span>Splits, seeds and confidence</span>}
         title="Reliability"
         subtitle="Pass/fail counts and failed cases per split, with replay seeds where recorded."
+        right={
+          <button
+            className="cbtn cbtn-primary"
+            disabled={running || !selected.length}
+            onClick={runCurrentSplit}
+          >
+            {running ? 'Running split…' : `Evaluate ${split === 'held_out' ? 'Held-out' : split[0].toUpperCase() + split.slice(1)} (${selected.length})`}
+          </button>
+        }
       />
       {notice && <div className="notice">{notice}</div>}
       {failure && <div className="notice notice-error">{failure}</div>}

@@ -64,6 +64,13 @@ class SdkKeyCreateRequest(BaseModel):
     label: str = Field(default="", max_length=128)
 
 
+class RepairFallbackRequest(BaseModel):
+    """Operator toggle for the LLM repair fallback (runtime-only flag)."""
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+
+
 class RollbackRequest(BaseModel):
     """Operator-only registry rollback: CAS on the seen revision, restore a
     specific target revision's definition."""

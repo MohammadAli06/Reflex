@@ -33,6 +33,7 @@ class HealingAgent:
         provenance_error_sink=None,
         mock_public_key: str = "",
         repair_proposer=None,
+        llm_gate=None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -45,6 +46,7 @@ class HealingAgent:
         self._provenance_error_sink = provenance_error_sink
         self._mock_public_key = mock_public_key
         self._repair_proposer = repair_proposer
+        self._llm_gate = llm_gate
 
     def run(self, task: Task, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
         emitter = emitter or EventEmitter(run_id, "healing")
@@ -61,6 +63,7 @@ class HealingAgent:
             provenance_error_sink=self._provenance_error_sink,
             mock_public_key=self._mock_public_key,
             repair_proposer=self._repair_proposer,
+            llm_gate=self._llm_gate,
         )
         outcome = healer.run(task.tool, task.args, case_id=task.id, dry_run=task.write)
 

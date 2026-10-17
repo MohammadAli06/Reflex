@@ -107,4 +107,10 @@ def all_cases() -> list[Case]:
         cases.extend(reviewed_cases())
     except Exception:
         pass
+    try:
+        from .fuzz import fuzz_cases
+
+        cases.extend(fuzz_cases(count=5, seed=42))
+    except Exception:
+        pass
     return cases
