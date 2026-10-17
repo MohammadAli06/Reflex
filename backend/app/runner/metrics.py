@@ -102,6 +102,12 @@ def summarize(records: list[RunRecord]) -> dict[str, Any]:
         "tokens_total": total_tokens,
         "schema_attempts": sum(r.schema_attempts for r in records),
         "infra_retries": sum(r.infra_retries for r in records),
+        # Additive (LLM fallback): per-source patch counts and refusals.
+        "patch_sources": {
+            "rule": sum(1 for r in records if r.agent == "healing" and r.healing_path == "rule"),
+            "llm": sum(1 for r in records if r.agent == "healing" and r.healing_path == "llm"),
+            "refusals": sum(1 for r in records if r.outcome == "refused"),
+        },
     }
 
 
@@ -117,8 +123,14 @@ def compute_metrics(records: list[RunRecord]) -> dict[str, Any]:
         return {"available": False}
     result: dict[str, Any] = {"available": True, "n_records": len(records), "agents": {}}
     for agent, agent_records in _group(records, lambda r: r.agent).items():
+        overall = summarize(agent_records)
+        # Additive (LLM fallback): ZTAR with LLM-resolved cases excluded so the
+        # rules-only rate stays visible. Existing keys are unchanged.
+        rules_only = [r for r in agent_records
+                      if not (r.agent == "healing" and r.healing_path == "llm")]
+        overall["ztar_rules_only"] = summarize(rules_only).get("ztar") if rules_only else None
         result["agents"][agent] = {
-            "overall": summarize(agent_records),
+            "overall": overall,
             "by_error_style": {
                 style: summarize(group)
                 for style, group in _group(agent_records, lambda r: r.error_style).items()

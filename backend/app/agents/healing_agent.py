@@ -32,6 +32,7 @@ class HealingAgent:
         provenance_sink=None,
         provenance_error_sink=None,
         mock_public_key: str = "",
+        repair_proposer=None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -43,6 +44,7 @@ class HealingAgent:
         self._provenance_sink = provenance_sink
         self._provenance_error_sink = provenance_error_sink
         self._mock_public_key = mock_public_key
+        self._repair_proposer = repair_proposer
 
     def run(self, task: Task, run_id: str, *, emitter: EventEmitter | None = None) -> AgentRunResult:
         emitter = emitter or EventEmitter(run_id, "healing")
@@ -58,11 +60,13 @@ class HealingAgent:
             provenance_sink=self._provenance_sink,
             provenance_error_sink=self._provenance_error_sink,
             mock_public_key=self._mock_public_key,
+            repair_proposer=self._repair_proposer,
         )
         outcome = healer.run(task.tool, task.args, case_id=task.id, dry_run=task.write)
 
         emitter.emit("run_finished", agent="healing", **outcome.to_event_data())
 
+        llm_tokens = outcome.llm_tokens or {}
         return AgentRunResult(
             agent="healing",
             task_id=task.id,
@@ -74,11 +78,11 @@ class HealingAgent:
             t_break=outcome.t_break,
             t_recovery=outcome.t_recovery,
             mttr=outcome.mttr,
-            tokens_input=0,
-            tokens_output=0,
-            healing_path="rule",
+            tokens_input=int(llm_tokens.get("input", 0) or 0),
+            tokens_output=int(llm_tokens.get("output", 0) or 0),
+            healing_path=outcome.healing_path,
             response_data=outcome.response_data,
             error_text=outcome.error_text,
-            model="rule-based",
+            model=outcome.model or "rule-based",
             tokens_reported=True,
         )

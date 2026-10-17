@@ -30,6 +30,8 @@ EVENT_TYPES = {
     "needs_human_review",
     "response_check",
     "not_drift",
+    "llm_proposal",
+    "llm_refused",
     "run_finished",
 }
 

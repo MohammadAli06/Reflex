@@ -439,8 +439,16 @@ export function ComparePage() {
                 </div>
               </div>
               {healing ? (
-                <span className={`badge badge-${healing.outcome === 'recovered' ? 'success' : healing.outcome === 'refused' ? 'warning' : 'neutral'}`}>
-                  {healing.outcome}
+                <span className="con-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <span className="text-muted" style={{ fontSize: 12 }}>
+                    Repaired by{' '}
+                    <b style={{ color: 'var(--ink)' }}>
+                      {healing.healing_path === 'llm' ? 'LLM fallback' : healing.healing_path ? 'Rules' : DASH}
+                    </b>
+                  </span>
+                  <span className={`badge badge-${healing.outcome === 'recovered' ? 'success' : healing.outcome === 'refused' ? 'warning' : 'neutral'}`}>
+                    {healing.outcome}
+                  </span>
                 </span>
               ) : (
                 <span className="badge badge-neutral">{running ? 'Running' : 'Not started'}</span>

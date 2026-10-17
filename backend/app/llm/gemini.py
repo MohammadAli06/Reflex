@@ -18,10 +18,11 @@ class GeminiUnavailable(RuntimeError):
 
 
 class GeminiClient(LLMClient):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, http_timeout_s: float | None = None) -> None:
         self._settings = settings
         self.model = settings.llm_model
         self._client = None
+        self._http_timeout_s = http_timeout_s
 
     def _ensure_client(self):
         if self._client is not None:
@@ -30,8 +31,18 @@ class GeminiClient(LLMClient):
             raise GeminiUnavailable("GOOGLE_API_KEY is not configured")
         try:
             from google import genai  # local import: SDK stays in this module
+            from google.genai import types as genai_types
         except Exception as exc:  # pragma: no cover - depends on env
             raise GeminiUnavailable(f"google-genai SDK not importable: {exc}") from exc
+        if self._http_timeout_s:
+            try:
+                options = genai_types.HttpOptions(timeout=self._http_timeout_s)
+                self._client = genai.Client(api_key=self._settings.google_api_key, http_options=options)
+                return self._client
+            except Exception:
+                # Falls through to a client without the SDK-level timeout; the
+                # repair proposer documents this instead of failing startup.
+                pass
         self._client = genai.Client(api_key=self._settings.google_api_key)
         return self._client
 

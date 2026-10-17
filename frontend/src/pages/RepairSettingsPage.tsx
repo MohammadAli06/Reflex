@@ -8,8 +8,8 @@ import { DASH } from '../utils/format'
 /**
  * Settings shows only what the backend enforces or exposes today. Values are
  * read-only: there is no endpoint that changes configuration. Controls that
- * have no working backend (rate limits, circuit breakers, LLM repair toggle)
- * are deliberately absent rather than shown as fake switches.
+ * have no working backend (rate limits, circuit breakers) are deliberately
+ * absent rather than shown as fake switches.
  */
 export function RepairSettingsPage() {
   const status = useApi(() => api.status(), [])
@@ -76,10 +76,18 @@ export function RepairSettingsPage() {
               value={llmKeyConfigured ? 'Configured' : 'Not configured'}
               tone={llmKeyConfigured ? 'ok' : undefined}
             />
+            <Metric
+              label="Repair fallback"
+              value={
+                summary?.llm_repair_enabled == null ? DASH : summary.llm_repair_enabled ? 'Enabled' : 'Disabled'
+              }
+              tone={summary?.llm_repair_enabled ? 'ok' : undefined}
+            />
           </div>
           <p className="con-sub" style={{ marginTop: 'var(--s3)' }}>
-            The key value is never sent to the browser — only whether one is present. Model-assisted
-            repair is not wired into the healing pipeline, so no repair-path control exists here.
+            The key value is never sent to the browser — only whether one is present. The fallback is a real
+            rules-first gate: the LLM proposes a mapping at most once per failure event, and only after the
+            rules engine reports no confident candidate. Safety refusals bypass it entirely.
           </p>
         </Panel>
       </div>

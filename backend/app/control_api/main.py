@@ -155,12 +155,21 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         except Exception:
             return ""
 
+    # The LLM fallback is constructed whenever the flag is on; without an API
+    # key its one attempt refuses with llm_unavailable instead of healing.
+    repair_proposer = None
+    if settings.llm_repair_enabled:
+        from ..healing.llm_fallback import GeminiRepairProposer
+
+        repair_proposer = GeminiRepairProposer(settings)
+
     def new_harness() -> Harness:
         return Harness(settings, client=mock, audit=audit,
                        revision_sink=record_revision, snapshot_sink=record_snapshot,
                        provenance_sink=record_provenance,
                        provenance_error_sink=record_provenance_failure,
-                       mock_public_key=resolved_public_key())
+                       mock_public_key=resolved_public_key(),
+                       repair_proposer=repair_proposer)
 
     try:
         revision_repo.seed_initial(_initial_tool_dicts())
@@ -637,6 +646,7 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
             "error": result.error_text or None,
             "attempts": result.attempts,
             "schema_attempts": result.schema_attempts,
+            "healing_path": result.healing_path,
         }
 
     @app.post("/api/scenarios/{scenario_id}/run")

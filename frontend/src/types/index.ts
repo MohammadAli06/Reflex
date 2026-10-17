@@ -131,6 +131,7 @@ export interface RunRecord {
   outcome: string
   expected_outcome: string
   correct: boolean | null
+  /** Repair path: 'rule' (rules engine) | 'llm' (LLM fallback) | 'none' (baseline). */
   healing_path: string
   tokens_heal: number
   tokens_total: number

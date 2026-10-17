@@ -19,6 +19,19 @@ phases, design and execution plan.
 - **Frontend:** React + Vite + TypeScript, Recharts, Vitest.
 - **LLM:** Gemini via Google AI Studio behind a replaceable `LLMClient`
   (a deterministic fake client is used when no key is configured).
+- **LLM repair fallback:** off by default (`LLM_REPAIR_ENABLED=false`). When on,
+  the rules engine still runs first; the LLM is consulted at most once per
+  failure event and only when the rules report no confident candidate
+  (`no_evidence` / `ambiguous_mapping`) — never on safety refusals (lossy
+  conversion, missing values/credentials, policy blocks). The proposal must
+  parse against a strict JSON schema, reference only fields that exist in the
+  old tool schema or the live contract, and never invent values; it then passes
+  through the same `validate_patch()` gate, compare-and-swap registry update,
+  audit chain and retry/rollback loop as rule patches. Without a configured
+  key the attempt refuses with `llm_unavailable`. Every patch/refusal records
+  `healing_path` (`rule` / `llm`) plus additive `llm_usage` and `llm_meta`
+  (model, prompt hash — never the prompt body — token counts, latency,
+  confidence, verdict); metrics add per-source counts and `ztar_rules_only`.
 - **Baseline:** plain tool-calling loop (LangChain is optional; documented in the
   parity report as a fairness caveat).
 

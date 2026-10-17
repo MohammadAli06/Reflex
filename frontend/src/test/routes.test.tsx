@@ -232,6 +232,41 @@ describe('Runs page', () => {
     expect(await screen.findByText('No decision recorded for this run.')).toBeInTheDocument()
   })
 
+  it('labels an LLM-fallback decision from the recorded healing path', async () => {
+    stubFetch({
+      '/api/audit': {
+        entries: [{ ...AUDIT.entries[0], healing_path: 'llm' }],
+      },
+    })
+    render(
+      <MemoryRouter initialEntries={['/console/runs/run-run-1']}>
+        <Routes>
+          <Route path="/console/runs/:runId" element={<RunsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    const card = await screen.findByTestId('decision-card')
+    expect(within(card).getByText('LLM fallback')).toBeInTheDocument()
+  })
+
+  it('shows a dash for a legacy record with no healing path', async () => {
+    const legacy: Record<string, unknown> = { ...AUDIT.entries[0] }
+    delete legacy.healing_path
+    stubFetch({
+      '/api/audit': { entries: [legacy] },
+    })
+    render(
+      <MemoryRouter initialEntries={['/console/runs/run-run-1']}>
+        <Routes>
+          <Route path="/console/runs/:runId" element={<RunsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    const card = await screen.findByTestId('decision-card')
+    expect(within(card).getByText('Repaired by')).toBeInTheDocument()
+    expect(card.textContent).toMatch(/Repaired by\s*—/)
+  })
+
   it('the decision ledger filters by outcome and a row click opens the run', async () => {
     render(
       <MemoryRouter initialEntries={['/console/runs?tab=ledger']}>

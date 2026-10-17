@@ -254,6 +254,25 @@ describe('RepairSettingsPage', () => {
     expect(screen.getByText('Not configured')).toBeInTheDocument()
     expect(screen.queryByText('Configured')).not.toBeInTheDocument()
   })
+
+  it('reports the real fallback state from /api/status', async () => {
+    mockApi({ '/api/status': { ...STATUS, llm_repair_enabled: true } })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(screen.getByText('Repair fallback')).toBeInTheDocument()
+    expect(screen.getByText('Enabled')).toBeInTheDocument()
+  })
+
+  it('shows the fallback row as a dash when the backend does not report it', async () => {
+    const legacy: Record<string, unknown> = { ...STATUS }
+    delete legacy.llm_repair_enabled
+    mockApi({ '/api/status': legacy })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(screen.getByText('Repair fallback')).toBeInTheDocument()
+    expect(screen.queryByText('Enabled')).not.toBeInTheDocument()
+    expect(screen.queryByText('Disabled')).not.toBeInTheDocument()
+  })
 })
 
 describe('SecurityPage', () => {

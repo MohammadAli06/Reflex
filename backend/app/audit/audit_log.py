@@ -39,7 +39,12 @@ class AuditEntry:
     outcome: str = "refused"
     reason_code: str | None = None
     healing_path: str = "rule"
-    llm_tokens: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0})
+    # Additive (LLM fallback). Named ``llm_usage`` because key-name redaction
+    # masks anything containing "token" and token counts are not secrets.
+    llm_usage: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0})
+    # Additive (LLM fallback): model, prompt hash, latency, confidence, verdict.
+    # Never the prompt body. Old entries simply lack this key when read back.
+    llm_meta: dict[str, Any] | None = None
     ts: str = field(default_factory=_now)
 
     def to_dict(self) -> dict[str, Any]:

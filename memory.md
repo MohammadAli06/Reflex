@@ -19,6 +19,14 @@ No secrets are stored here.
 - Dedicated reason codes for refusals; every refusal emits a trace event and a
   redacted audit record.
 - Audit hash = SHA-256 of canonical JSON (change tracking only, not authenticity).
+- LLM repair fallback gates on `LLM_REPAIR_ENABLED` (default false). Rules run
+  first; the LLM is called at most once per failure event and only on `no_evidence`
+  / `ambiguous_mapping` rule refusals — safety refusals and the retry cap are
+  final. The proposal parses against a strict JSON schema (extra keys, unknown
+  fields, low confidence -> `llm_*` reason codes) and re-enters the shared
+  validate/CAS/audit/rollback path. `healing_path` (`rule`/`llm`) is the
+  recorded source; prompt bodies are never logged (only their SHA-256), and the
+  prompt carries field names/types plus a truncated, value-scrubbed error body.
 - Frontend forced to `NODE_ENV=test` under Vitest so React's dev build is used.
 - Control API (8001) persists to SQLite (`data/reflex.db`, SQLAlchemy 2.0,
   WAL + busy_timeout); mock API (8000) stays in-memory. Postgres later = one
@@ -110,6 +118,17 @@ No secrets are stored here.
   `POST /api/security/sessions/{id}/revoke`, `POST /api/security/tamper`,
   a 6th `tampered_schema` safety scenario, and `untrusted_schema` provenance
   refusals recorded as `provenance.ok = false`.
+- LLM repair fallback: `healing/llm_fallback.py` (strict `RepairProposal`
+  parser, sanitized context builder, `RepairProposer` protocol,
+  `GeminiRepairProposer`, `FakeRepairClient`), healer hook at the
+  hypothesize-refusal fork with the flag gate, new reason codes
+  (`llm_uncertain`, `llm_invalid_output`, `llm_validation_failed`,
+  `llm_unavailable`), `llm_proposal`/`llm_refused` trace events, additive
+  `AuditEntry.llm_usage`/`llm_meta` (renamed from raw `llm_tokens` because the
+  key-name redactor masks anything containing "token"), honest token passthrough
+  in HealingAgent, `/api/sdk/call` `healing_path`, metrics `patch_sources` +
+  `ztar_rules_only`, and UI: "Repaired by" chips (decision card, Reflex lane),
+  Settings repair-fallback status row, conditional Landing sentence.
 - Control API endpoints for the console: `/api/realworld/cases`,
   `/api/realworld/build`, `/api/evaluation/config`, plus repair-policy fields on
   `/api/status` and `persistence_error` on `/api/status` and
@@ -127,15 +146,17 @@ No secrets are stored here.
 
 ## Evidence
 
-- Backend: `python -m pytest -q` → 102 passed, stable across three consecutive
-  runs (45 original + 6 DB + 3 pre-existing spec-loader + new across signing,
-  real-spec harness + API routes, fuzz and DB-config; plus externally added
-  `tests/test_reflex_sdk.py` and extra route tests).
-- Frontend: `npm run build` succeeds; `npm run test:run` → 32 passed (9 original
-  + 23 new, incl. 7 Run Benchmark tests: start API called with reviewed ids only,
-  polling + disabled button + `n of N` progress, outcomes/counters/trace link
-  fill-in, start failure banner, failed-run banner, lost-poll banner, no-op
-  when nothing is reviewed).
+- Backend: `python -m pytest -q` → 130 passed (110 pre-LLM-fallback + 20 new
+  in `tests/healing/test_llm_fallback.py`: flag-off identity,
+  rules-primacy, one-proposal-per-event, invalid outputs, validator
+  rejection, rollback-on-failed-retry, provider errors, prompt sanitization
+  (planted secret and payload value absent), injection containment, audit
+  fields, per-source metrics, SDK `healing_path`). Flag-off real-source run
+  unchanged: 1 case, baseline failed, Reflex recovered, `wrong_patches=0`.
+- Frontend: `npm run build` succeeds; `npm run test:run` → 71 passed
+  (64 pre-change + 6 LLM-fallback UI tests: decision-card
+  Rules/LLM-fallback/dash, Reflex-lane chips, Settings real fallback state +
+  dash for absent field, Landing copy quiet while the flag is off).
 - Real-spec benchmark: `python -m app.runner.run_suite --source real` →
   1 case, baseline `failed`, Reflex `recovered`, `wrong_patches=0`.
 - Fuzz: `--fuzz 200 --seed 7` → 200 cases, `wrong_patches=0`.
@@ -171,8 +192,6 @@ No secrets are stored here.
   `ToolDefinition`) and the spec-watch background task
   (`SPEC_WATCH_INTERVAL_S` is read and reported by `/api/status` but nothing
   polls yet — `/console/spec-watch` states this plainly).
-- LLM mapping fallback (`LLM_REPAIR_ENABLED`, default off) behind the same
-  `validate_patch()` gate, with an adversarial fake-LLM suite.
 - Payments/idempotency (Phase 5): mock ledger, `Idempotency-Key`,
   `timeout_after_commit`, `ToolDefinition.idempotency` / `readback`,
   `duplicate_writes`.

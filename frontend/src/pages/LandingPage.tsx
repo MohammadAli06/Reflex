@@ -373,6 +373,9 @@ export function LandingPage() {
               <p className="lp-sub">
                 A deterministic pipeline sits between your agent and the upstream API, turning a
                 rejected request into either a verified patch or a logged refusal.
+                {status.data?.llm_repair_enabled
+                  ? ' When the rules engine has no confident candidate, a config-gated LLM fallback may propose a mapping once — it passes through the same validation gate or is refused.'
+                  : ''}
               </p>
             </div>
 

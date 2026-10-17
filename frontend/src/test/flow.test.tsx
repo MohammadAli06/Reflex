@@ -225,6 +225,36 @@ describe('Comparison page', () => {
     expect(screen.getAllByText(/No patch applied/).length).toBeGreaterThan(0)
     expect(screen.queryByText('Verified retry')).not.toBeInTheDocument()
   })
+
+  it('labels the repair source on the Reflex lane from the record only', async () => {
+    stubFetch({
+      '/api/runs/run-1': RECOVERED_RUN,
+      '/api/cases': CASES,
+      '/api/runs': { ...RECOVERED_RUN, status: 'running', records: [] },
+    })
+    renderCompare()
+    fireEvent.click(await screen.findByRole('button', { name: /Run both agents/ }))
+    expect(await screen.findByText('Rules')).toBeInTheDocument()
+    expect(screen.queryByText('LLM fallback')).not.toBeInTheDocument()
+  })
+
+  it('labels an LLM-fallback repair only when the record says so', async () => {
+    const llmRun = {
+      ...RECOVERED_RUN,
+      records: [
+        RECOVERED_RUN.records[0],
+        { ...RECOVERED_RUN.records[1], healing_path: 'llm', model: 'gemini-test' },
+      ],
+    }
+    stubFetch({
+      '/api/runs/run-1': llmRun,
+      '/api/cases': CASES,
+      '/api/runs': { ...llmRun, status: 'running', records: [] },
+    })
+    renderCompare()
+    fireEvent.click(await screen.findByRole('button', { name: /Run both agents/ }))
+    expect(await screen.findByText('LLM fallback')).toBeInTheDocument()
+  })
 })
 
 // ---------------------------------------------------------------------------

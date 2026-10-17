@@ -27,6 +27,8 @@ export function DecisionCard({ runId }: { runId: string }) {
   }
 
   const shortHash = (entry.schema_sha256 ?? '').slice(0, 8)
+  const repairedBy =
+    entry.healing_path === 'llm' ? 'LLM fallback' : entry.healing_path === 'rule' ? 'Rules' : DASH
 
   return (
     <div
@@ -39,6 +41,10 @@ export function DecisionCard({ runId }: { runId: string }) {
           <div className="text-label" style={{ marginBottom: 4 }}>Decision</div>
           <div className="con-row" style={{ gap: 8, flexWrap: 'wrap' }}>
             <StatusBadge label={entry.outcome} />
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              Repaired by {' '}
+              <b style={{ color: 'var(--ink)' }}>{repairedBy}</b>
+            </span>
             {entry.reason_code ? (
               <span className="font-mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 {entry.reason_code}

@@ -36,4 +36,17 @@ describe('LandingPage', () => {
     const dashes = screen.getAllByText('—')
     expect(dashes.length).toBeGreaterThanOrEqual(3)
   })
+
+  it('never mentions the LLM fallback unless the backend reports it enabled', async () => {
+    function stub(jsonBody: unknown) {
+      vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+        ok: true, status: 200, json: () => Promise.resolve(jsonBody), text: () => '',
+      } as Response)))
+    }
+    // Flag off (the real default): no fallback claim at all.
+    stub({ overall: {}, available: false, status: { mock_api_reachable: true, llm_repair_enabled: false } })
+    renderLanding()
+    await screen.findByText('HEALED')
+    expect(screen.queryByText(/LLM fallback/)).not.toBeInTheDocument()
+  })
 })

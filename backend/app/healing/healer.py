@@ -32,6 +32,13 @@ from . import reason_codes as rc
 from .classifier import Category, classify, describe
 from .events import EventEmitter
 from .hypothesize import CandidatePatch, apply_patch_to_definition, hypothesize
+from .llm_fallback import (
+    ProposerMeta,
+    RepairOutcome,
+    RepairProposer,
+    build_repair_context_for_prompt,
+    proposal_to_candidate_patch,
+)
 from .response_check import check_response
 from .schema_diff import diff_schemas
 from .schema_fetch import UntrustedSchemaError, fetch_verified
@@ -56,6 +63,9 @@ class HealOutcome:
     healing_path: str = "rule"
     patch: CandidatePatch | None = None
     error_text: str = ""
+    llm_tokens: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0})
+    llm_meta: dict[str, Any] | None = None
+    model: str = ""
 
     @property
     def recovered(self) -> bool:
@@ -97,6 +107,7 @@ class Healer:
         provenance_sink=None,
         provenance_error_sink=None,
         mock_public_key: str = "",
+        repair_proposer: RepairProposer | None = None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -109,6 +120,8 @@ class Healer:
         self._provenance_sink = provenance_sink
         self._provenance_error_sink = provenance_error_sink
         self._mock_public_key = mock_public_key
+        self._repair_proposer = repair_proposer
+        self._llm_repair_enabled = settings.llm_repair_enabled
 
     def _verified(self) -> "VerifiedSchema":
         """Fetch the schema with provenance checks applied when enabled.
@@ -157,6 +170,8 @@ class Healer:
         confidence: float,
         error: dict[str, Any],
         healing_path: str = "rule",
+        llm_usage: dict[str, int] | None = None,
+        llm_meta: dict[str, Any] | None = None,
     ) -> None:
         entry = AuditEntry(
             run_id=self._emitter.run_id,
@@ -173,8 +188,46 @@ class Healer:
             outcome=outcome,
             reason_code=reason_code,
             healing_path=healing_path,
+            llm_usage=llm_usage or {"input": 0, "output": 0},
+            llm_meta=llm_meta,
         )
         self._audit.append(entry)
+
+    def _llm_fallback(
+        self,
+        definition: ToolDefinition,
+        verified: Any,
+        diff: Any,
+        result: CallResult,
+        args: dict[str, Any],
+        rule_reason: str,
+    ) -> RepairOutcome | None:
+        """Attempt one LLM proposal; None means the fallback was not consulted.
+
+        Consulted only between *no-candidate* rule refusals. A rule refusal in
+        ``FINAL_REFUSAL_CODES`` (lossy conversion, missing values/credentials,
+        policy blocks, etc.) is final and never overridden here.
+        """
+        if self._repair_proposer is None or not self._llm_repair_enabled:
+            return None
+        if rule_reason not in rc.LLM_ELIGIBLE_CODES:
+            return None
+        context = build_repair_context_for_prompt(
+            definition, verified, diff, result,
+            args=args,
+            secret_values=[s.value for s in self._settings.header_secrets.values()],
+        )
+        try:
+            return self._repair_proposer.propose_repair(context)
+        except Exception as exc:
+            # The proposer must never crash the run: any provider error
+            # becomes a plain LLM_UNAVAILABLE refusal.
+            return RepairOutcome(
+                refused=True,
+                reason_code=rc.LLM_UNAVAILABLE,
+                detail=f"llm provider error: {exc}",
+                meta=ProposerMeta(model=self._repair_proposer.model, tokens_reported=False),
+            )
 
     def run(
         self,
@@ -296,7 +349,11 @@ class Healer:
                                            new_definition=rolled.to_dict(),
                                            evidence=["same error after patch; no new schema delta"],
                                            confidence=0.0,
-                                           error={"status": result.status, "body": result.error_summary()})
+                                           error={"status": result.status, "body": result.error_summary()},
+                                           healing_path=outcome.healing_path,
+                                           llm_usage=outcome.llm_tokens if outcome.healing_path == "llm" else None,
+                                           llm_meta=({**(outcome.llm_meta or {}), "verdict": "rolled_back"}
+                                                     if outcome.healing_path == "llm" else None))
                         outcome.outcome, outcome.reason_code = "refused", rc.VALIDATION_FAILED
                         outcome.t_break = t_break
                         outcome.definition = rolled
@@ -321,20 +378,75 @@ class Healer:
                              confidence=patch.confidence, refused=patch.refused,
                              reason_code=patch.reason_code,
                              conversions=patch.conversions)
+                llm_used = False
                 if patch.refused:
-                    emitter.emit("refused", reason_code=patch.reason_code)
-                    self._record_audit(definition, "refused", patch.reason_code,
-                                       verified_version=verified.version,
-                                       verified_hash=verified.sha256,
-                                       old_definition=definition.to_dict(), new_definition=None,
-                                       evidence=patch.evidence, confidence=patch.confidence,
-                                       error={"status": result.status, "body": result.error_summary()})
-                    outcome.outcome, outcome.reason_code = "refused", patch.reason_code
-                    outcome.t_break = t_break
-                    outcome.definition = definition
-                    outcome.patch = patch
-                    outcome.error_text = last_error_text
-                    return outcome
+                    # Rules give up here. The LLM is consulted ONLY on the
+                    # no-candidate codes (unrecognized or ambiguous drift);
+                    # safety refusals above are final and never overridden.
+                    llm_outcome = self._llm_fallback(
+                        definition, verified, diff, result, args, patch.reason_code,
+                    )
+                    if llm_outcome is not None:
+                        llm_used = True
+                        meta = llm_outcome.meta or ProposerMeta()
+                        outcome.model = meta.model
+                        outcome.healing_path = "llm"
+                        tokens = {"input": meta.input_tokens, "output": meta.output_tokens}
+                        outcome.llm_tokens = tokens
+                        if llm_outcome.proposal is not None:
+                            llm_patch, llm_refusal, llm_errors = proposal_to_candidate_patch(
+                                llm_outcome.proposal, definition, verified, args,
+                            )
+                            if llm_patch is None:
+                                outcome.llm_meta = {**meta.to_dict(), "verdict": "refused", "reason_code": llm_refusal}
+                                reason = llm_refusal
+                                emitter.emit("llm_refused", reason_code=reason,
+                                             detail=(llm_errors or ["proposal not usable"])[0],
+                                             model=meta.model)
+                            else:
+                                outcome.llm_meta = {**meta.to_dict()}
+                                emitter.emit("llm_proposal", model=meta.model,
+                                             prompt_sha256=meta.prompt_sha256,
+                                             input_tokens=meta.input_tokens,
+                                             output_tokens=meta.output_tokens,
+                                             latency_s=meta.latency_s, confidence=meta.confidence,
+                                             rationale=llm_outcome.proposal.rationale)
+                                patch = llm_patch
+                        else:
+                            reason = llm_outcome.reason_code or rc.LLM_UNAVAILABLE
+                            outcome.llm_meta = {**meta.to_dict(), "verdict": "refused"}
+                            emitter.emit("llm_refused", reason_code=reason,
+                                         detail=llm_outcome.detail, model=meta.model)
+                        if patch.refused:
+                            emitter.emit("refused", reason_code=reason)
+                            self._record_audit(definition, "refused", reason,
+                                               verified_version=verified.version,
+                                               verified_hash=verified.sha256,
+                                               old_definition=definition.to_dict(), new_definition=None,
+                                               evidence=patch.evidence, confidence=0.0,
+                                               error={"status": result.status, "body": result.error_summary()},
+                                               healing_path="llm",
+                                               llm_usage=tokens, llm_meta=outcome.llm_meta)
+                            outcome.outcome, outcome.reason_code = "refused", reason
+                            outcome.t_break = t_break
+                            outcome.definition = definition
+                            outcome.patch = patch
+                            outcome.error_text = last_error_text
+                            return outcome
+                    else:
+                        emitter.emit("refused", reason_code=patch.reason_code)
+                        self._record_audit(definition, "refused", patch.reason_code,
+                                           verified_version=verified.version,
+                                           verified_hash=verified.sha256,
+                                           old_definition=definition.to_dict(), new_definition=None,
+                                           evidence=patch.evidence, confidence=patch.confidence,
+                                           error={"status": result.status, "body": result.error_summary()})
+                        outcome.outcome, outcome.reason_code = "refused", patch.reason_code
+                        outcome.t_break = t_break
+                        outcome.definition = definition
+                        outcome.patch = patch
+                        outcome.error_text = last_error_text
+                        return outcome
 
                 patched_def = apply_patch_to_definition(definition, patch, verified)
                 validation = validate_patch(patched_def, verified, args, self._secrets, dry_run=dry_run)
@@ -342,17 +454,25 @@ class Healer:
                              reason_code=validation.reason_code)
                 if not validation.ok:
                     audit_outcome = "needs_human_review" if validation.needs_human else "refused"
+                    refusal_reason = validation.reason_code
+                    if llm_used and not validation.needs_human:
+                        refusal_reason = rc.LLM_VALIDATION_FAILED
                     emitter.emit("needs_human_review" if validation.needs_human else "refused",
-                                 reason_code=validation.reason_code, errors=validation.errors)
-                    self._record_audit(definition, audit_outcome, validation.reason_code,
+                                 reason_code=refusal_reason, errors=validation.errors)
+                    self._record_audit(definition, audit_outcome, refusal_reason,
                                        verified_version=verified.version,
                                        verified_hash=verified.sha256,
                                        old_definition=definition.to_dict(),
                                        new_definition=patched_def.to_dict(),
-                                       evidence=patch.evidence, confidence=patch.confidence,
-                                       error={"status": result.status, "body": result.error_summary()})
+                                       evidence=patch.evidence + validation.errors,
+                                       confidence=patch.confidence,
+                                       error={"status": result.status, "body": result.error_summary()},
+                                       healing_path=patch.healing_path,
+                                       llm_usage=outcome.llm_tokens if llm_used else None,
+                                       llm_meta=({**(outcome.llm_meta or {}), "verdict": "validation_failed"}
+                                                 if llm_used else None))
                     outcome.outcome = "refused"
-                    outcome.reason_code = validation.reason_code
+                    outcome.reason_code = refusal_reason
                     outcome.t_break = t_break
                     outcome.definition = definition
                     outcome.patch = patch
@@ -376,13 +496,18 @@ class Healer:
                 emitter.emit("patch_applied", tool=definition.name, revision=definition.revision,
                              revision_before=old_revision,
                              conversions=patch.conversions, header_names=[h["name"] for h in definition.required_headers])
+                if llm_used and outcome.llm_meta is not None:
+                    outcome.llm_meta["verdict"] = "applied"
                 self._record_audit(definition, "applied", None,
                                    verified_version=verified.version,
                                    verified_hash=verified.sha256,
                                    old_definition=old_def_dict,
                                    new_definition=definition.to_dict(),
                                    evidence=patch.evidence, confidence=patch.confidence,
-                                   error={"status": result.status, "body": result.error_summary()})
+                                   error={"status": result.status, "body": result.error_summary()},
+                                   healing_path=patch.healing_path,
+                                   llm_usage=outcome.llm_tokens if llm_used else None,
+                                   llm_meta=outcome.llm_meta if llm_used else None)
 
                 emitter.emit("retry", attempt=outcome.attempts + 1, revision=definition.revision)
                 try:
