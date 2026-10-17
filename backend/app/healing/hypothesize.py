@@ -21,6 +21,20 @@ _AMBIGUITY_TIE = 0.10
 _UNIQUE_BY_ELIMINATION_CONFIDENCE = 0.7
 _MAX_CONFIDENCE = 0.99
 
+#: Type transitions that would silently change meaning. Anything here is
+#: refused as ``unsafe_conversion`` instead of "no evidence" so the safe
+#: or refusal reason reflects reality.
+UNSAFE_TRANSITIONS = {
+    ("number", "integer"),   # float -> int truncation
+    ("integer", "number"),   # int -> float arithmetic
+    ("string", "number"),    # unclean string -> float
+    ("number", "string"),    # float rendering is not exact round-trip
+}
+
+
+def _unsafe_transition(from_type: str | None, to_type: str | None) -> bool:
+    return (from_type, to_type) in UNSAFE_TRANSITIONS
+
 
 @dataclass
 class CandidatePatch:
@@ -76,6 +90,8 @@ def _match(
 
     if len(removed) == 1 and len(added) == 1:
         old_p, new_p = removed[0], added[0]
+        if _unsafe_transition(old_leaves[old_p]["type"], new_leaves[new_p]["type"]):
+            return None, rc.UNSAFE_CONVERSION
         ok, kind = compatible(old_p, new_p)
         if not ok:
             return None, rc.NO_EVIDENCE
@@ -83,6 +99,9 @@ def _match(
 
     pairs: list[tuple[str, str, str | None, float]] = []
     for old_p in removed:
+        for new_p in added:
+            if _unsafe_transition(old_leaves[old_p]["type"], new_leaves[new_p]["type"]):
+                return None, rc.UNSAFE_CONVERSION
         scored = []
         for new_p in added:
             ok, kind = compatible(old_p, new_p)
@@ -119,6 +138,8 @@ def hypothesize(
     for path, from_t, to_t in diff.type_changed:
         if path not in bindings:
             continue
+        if _unsafe_transition(from_t, to_t):
+            return _refuse(tool, rc.UNSAFE_CONVERSION, evidence)
         ok, kind = _convert_kind(from_t, to_t)
         if not ok:
             return _refuse(tool, rc.NO_EVIDENCE, evidence)

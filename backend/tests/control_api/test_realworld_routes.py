@@ -19,6 +19,8 @@ from fastapi.testclient import TestClient
 from app.config import load_settings
 from app.control_api.main import create_app as create_control_app
 from app.mock_api.main import create_app as create_mock_app
+
+from ..support.auth import login_operator
 from app.realworld.case_builder import reviewed_cases
 from app.runner.cases import all_cases
 
@@ -41,6 +43,7 @@ def control(tmp_path_factory):
     mock_client.__enter__()
     client = TestClient(create_control_app(settings, mock_client=mock_client))
     client.__enter__()
+    login_operator(client)  # operator routes are session-gated
     try:
         yield client
     finally:

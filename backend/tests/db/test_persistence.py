@@ -17,6 +17,8 @@ from app.mock_api.main import create_app as create_mock_app
 from app.registry.tool_registry import StaleRevisionError
 from app.registry.tools import initial_definitions
 
+from ..support.auth import login_operator
+
 ADMIN_KEY = "test-admin-key"
 TENANT_TOKEN = "tenant-secret-value"
 
@@ -41,6 +43,7 @@ def apps(db_settings):
     mock_client.__enter__()
     control_client = TestClient(create_control_app(db_settings, mock_client=mock_client))
     control_client.__enter__()
+    login_operator(control_client)  # operator routes are session-gated
     try:
         yield control_client, db_settings
     finally:
@@ -120,6 +123,7 @@ def test_runs_audit_registry_survive_restart(apps):
     try:
         restarted = TestClient(create_control_app(settings, mock_client=mock_client))
         restarted.__enter__()
+        login_operator(restarted)
         try:
             assert restarted.get(f"/api/runs/{run_id}").json()["status"] == "finished"
             assert restarted.get(f"/api/runs/{run_id}").json()["records"]
@@ -161,6 +165,9 @@ def test_sse_replay_from_last_event_id(apps):
 
 def test_login_sets_session_cookie_and_me(apps):
     control, _ = apps
+    # The fixture logs in; this test deliberately starts from a fresh client.
+    assert control.get("/api/me").status_code == 200
+    assert control.post("/api/logout").status_code == 200
     assert control.get("/api/me").status_code == 401
 
     bad = control.post("/api/login", json={"username": "operator", "password": "wrong"})

@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from .exchange import REDACTED, is_sensitive_key, redact as redact_value  # single reusable redaction
+from .exchange import (
+    REDACTED,
+    is_sensitive_key,
+    redact as redact_value,
+    scrub_credential_text,
+)
 
 EVENT_TYPES = {
     "run_started",
@@ -55,7 +60,7 @@ class Redactor:
         for value in self._values:
             if value and value in out:
                 out = out.replace(value, REDACTED)
-        return out
+        return scrub_credential_text(out)
 
     def redact(self, obj: Any) -> Any:
         return redact_value(obj) if not self._values else self._redact_with_values(obj)

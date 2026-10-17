@@ -273,6 +273,225 @@ describe('RepairSettingsPage', () => {
     expect(screen.queryByText('Enabled')).not.toBeInTheDocument()
     expect(screen.queryByText('Disabled')).not.toBeInTheDocument()
   })
+
+  it('renders the real access state from the security status', async () => {
+    mockApi({
+      '/api/status': { ...STATUS },
+      '/api/security/status': {
+        chain: { ok: true, checked: 1, first_broken_id: null },
+        provenance: { ok: true, signature_verified: true },
+        signing_enabled: true,
+        auth: { roles: ['operator', 'sdk'], sdk_mode: 'key_required', active_sdk_keys: 2 },
+        breakers: {},
+        hosts: ['localhost'],
+      },
+    })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(await screen.findByText('SDK key required')).toBeInTheDocument()
+    expect(document.body.textContent).toMatch(/Active SDK keys\s*2/)
+    expect(screen.getByText('localhost')).toBeInTheDocument()
+  })
+
+  it('shows dashes for access fields the backend does not report', async () => {
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(await screen.findByText('Unknown')).toBeInTheDocument()
+    const body = document.body.textContent ?? ''
+    expect(body).not.toContain('SDK key required')
+  })
+
+  it('adapts the integration copy to the real SDK-key state', async () => {
+    mockApi({
+      '/api/security/status': {
+        chain: { ok: true, checked: 1, first_broken_id: null },
+        provenance: { ok: true, signature_verified: true },
+        signing_enabled: true,
+        auth: { roles: ['operator', 'sdk'], sdk_mode: 'key_required', active_sdk_keys: 2 },
+      },
+    })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(await screen.findByText(/2 active SDK key\(s\)/)).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('unauthenticated today')
+  })
+
+  it('shows real SDK snippets for all three tabs', async () => {
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    const snippet = screen.getByTestId('integration-snippet')
+    // Python tab is default; the real sync client API, not an invented one.
+    expect(snippet.textContent).toContain('from reflex_sdk import ReflexClient')
+    expect(snippet.textContent).toContain('client.call("fetch_user"')
+    expect(snippet.textContent).not.toContain('call_tool') // the old fake API is gone
+
+    fireEvent.click(screen.getByRole('tab', { name: 'curl' }))
+    expect(screen.getByTestId('integration-snippet').textContent).toContain('curl -sS -X POST')
+    fireEvent.click(screen.getByRole('tab', { name: 'PowerShell' }))
+    expect(screen.getByTestId('integration-snippet').textContent).toContain('Invoke-RestMethod')
+    expect(screen.getByText('unauthenticated today', { exact: false })).toBeInTheDocument()
+  })
+
+  it('copies the active snippet to the clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(window, 'navigator', {
+      value: { ...window.navigator, clipboard: { writeText } },
+      writable: true,
+    })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    const pill = document.querySelector('.snippet-copy') as HTMLElement
+    fireEvent.click(within(pill).getByRole('button', { name: 'Copy to clipboard' }))
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining('ReflexClient')),
+    )
+  })
+
+  it('Run this shows the real SDK response plus the recorded recovery time', async () => {
+    // A dedicated stub keeps the run-detail route ahead of the generic /runs one.
+    stubSdkFlow({
+      '/api/sdk/call': {
+        run_id: 'run-sdk-1', outcome: 'recovered', healed: true, data: { name: 'Ada' },
+        reason_code: null, error: null, attempts: 2, schema_attempts: 1, healing_path: 'rule',
+      },
+      '/api/runs/run-sdk-1': {
+        run_id: 'run-sdk-1', status: 'finished', records: [
+          { agent: 'healing', t_break: 0.1, t_recovery: 0.9 },
+        ],
+      },
+    })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    fireEvent.click(screen.getByRole('button', { name: /Run this against the live engine/ }))
+    const card = await screen.findByTestId('sdk-call-result')
+    expect(within(card).getByText('200')).toBeInTheDocument()
+    expect(within(card).getByText('recovered')).toBeInTheDocument()
+    expect(within(card).getByText('rule')).toBeInTheDocument() // healing_path
+    expect(within(card).getByText('0.800s')).toBeInTheDocument() // recorded, not a stopwatch
+    expect(within(card).getByText('run-sdk-1')).toBeInTheDocument()
+  })
+
+  it('Run this reports the real error when the backend fails', async () => {
+    stubSdkFlow({
+      '/api/sdk/call': () => jsonResponse({ detail: 'SDK execution could not complete' }, 502),
+    })
+    renderAt('/console/settings', <RepairSettingsPage />)
+    await screen.findByRole('heading', { name: 'Settings' })
+    fireEvent.click(screen.getByRole('button', { name: /Run this against the live engine/ }))
+    await waitFor(() =>
+      expect(document.body.textContent).toMatch(/SDK call failed: SDK execution could not complete/),
+    )
+    expect(screen.queryByTestId('sdk-call-result')).not.toBeInTheDocument()
+  })
+})
+
+/** Route-keyed stub where later keys are checked first (more specific wins). */
+function stubSdkFlow(routes: Record<string, unknown>) {
+  const entries = Object.entries(routes).reverse() // specific → general
+  const base: Record<string, unknown> = {
+    '/api/me': { username: 'op' },
+    '/api/status': STATUS,
+    '/api/security/status': SECURITY,
+    '/api/security/sessions': { sessions: [] },
+    '/api/realworld/cases': {
+      cases: [], summary: {
+        registered: 0, reviewed: 0, evaluated: 0, recovered: 0,
+        correct_refusals: 0, wrong_patches: 0, failed: 0,
+      },
+    },
+  }
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : String(input)
+    const ordered = [...entries, ...Object.entries(base)]
+    for (const [path, body] of ordered) {
+      if (url.includes(path)) {
+        if (typeof body === 'function') return (body as () => unknown)() as Promise<Response>
+        return jsonResponse(body)
+      }
+    }
+    return jsonResponse({ detail: 'not found' }, 404)
+  }))
+}
+
+const DRYRUN_PROPOSED = {
+  kind: 'dryrun',
+  outcome: 'proposed',
+  source: 'rule',
+  reason_code: null,
+  drift_classification: 'possible_drift',
+  diff: { endpoint: '/user/fetch', removed: ['user_id'], added: ['account.id'], type_changed: [], added_headers: [], removed_headers: [] },
+  candidate: { new_bindings: { 'account.id': { source: 'arg', arg: 'user_id' } }, new_required_headers: [], conversions: {}, evidence: ['map user_id -> account.id'], confidence: 0.7 },
+  validation: { ok: true, errors: [], reason_code: null, needs_human: false },
+  corrected_request: { method: 'POST', path: '/user/fetch', headers: { endpoint: '/user/fetch', method: 'POST', header_names: [], provenance: {} }, body: { account: { id: '123' } } },
+  missing_values: [],
+}
+
+const DRYRUN_REFUSED = {
+  kind: 'dryrun',
+  outcome: 'refused',
+  source: 'rule',
+  reason_code: 'ambiguous_mapping',
+  drift_classification: 'possible_drift',
+  diff: null,
+  candidate: null,
+  validation: null,
+  corrected_request: null,
+  missing_values: [],
+}
+
+describe('RealWorldPage dry-run', () => {
+  async function openDryRun() {
+    renderAt('/console/benchmarks', <RealWorldPage />)
+    await screen.findByRole('heading', { name: 'Real-World Benchmark' })
+    fireEvent.click(screen.getByRole('button', { name: 'Try your own API' }))
+    expect(screen.getByTestId('dryrun-banner')).toHaveTextContent('Dry-run: no request was sent.')
+  }
+
+  it('switches to the dry-run section and the banner is present before any analysis', async () => {
+    await openDryRun()
+    expect(screen.queryByTestId('dryrun-result')).not.toBeInTheDocument()
+  })
+
+  it('loads the example and shows the proposed repair with the Repaired by chip', async () => {
+    await openDryRun()
+    // Both inputs are wired to the same honest dry-run endpoints.
+    fireEvent.click(screen.getByTestId('dryrun-load-example'))
+    expect((screen.getByTestId('dryrun-old-spec') as HTMLTextAreaElement).value).toContain('user_id')
+    expect((screen.getByTestId('dryrun-new-spec') as HTMLTextAreaElement).value).toContain('account')
+
+    stubSdkFlow({ '/api/dryrun/analyze': DRYRUN_PROPOSED, '/api/dryrun/parse': { old_operations: [], new_operations: [], shared_operations: [] } })
+    fireEvent.click(screen.getByTestId('dryrun-analyze'))
+    const result = await screen.findByTestId('dryrun-result')
+    expect(within(result).getByText('proposed')).toBeInTheDocument()
+    expect(within(result).getByText('Rules')).toBeInTheDocument()
+    expect(within(result).getByText('map user_id -> account.id')).toBeInTheDocument()
+    // The banner keeps stating the dry-run nature even with a result on screen.
+    expect(screen.getByTestId('dryrun-banner')).toHaveTextContent('Dry-run: no request was sent.')
+  })
+
+  it('renders a refusal as a first-class result, not an error', async () => {
+    await openDryRun()
+    fireEvent.click(screen.getByTestId('dryrun-load-example'))
+    stubSdkFlow({ '/api/dryrun/analyze': DRYRUN_REFUSED })
+    fireEvent.click(screen.getByTestId('dryrun-analyze'))
+    const result = await screen.findByTestId('dryrun-refusal')
+    expect(within(result).getByText('Refused')).toBeInTheDocument()
+    expect(within(result).getByText('ambiguous_mapping')).toBeInTheDocument()
+    expect(within(screen.getByTestId('dryrun-result')).getByText('repaired by', { exact: false })).toBeInTheDocument()
+  })
+
+  it('shows a clean validation error and never an invented result', async () => {
+    await openDryRun()
+    fireEvent.click(screen.getByTestId('dryrun-load-example'))
+    stubSdkFlow({
+      '/api/dryrun/analyze': () => jsonResponse(
+        { detail: { message: 'old_spec is not valid JSON', code: 'invalid_spec' } }, 400),
+    })
+    fireEvent.click(screen.getByTestId('dryrun-analyze'))
+    expect(await screen.findByTestId('dryrun-error')).toBeInTheDocument()
+    expect(screen.queryByTestId('dryrun-result')).not.toBeInTheDocument()
+    expect(screen.getByTestId('dryrun-banner')).toBeInTheDocument()
+  })
 })
 
 describe('SecurityPage', () => {

@@ -2,6 +2,8 @@ import type {
   AuditEntry,
   CaseInfo,
   ConsistencyResult,
+  DryRunParseResponse,
+  DryRunResult,
   EvaluationConfig,
   MetricsResponse,
   MutateResult,
@@ -13,6 +15,7 @@ import type {
   SchemaResponse,
   SecurityStatus,
   SessionInfo,
+  SdkCallResult,
   StatusResponse,
   TamperResult,
   ErrorStyle,
@@ -104,4 +107,31 @@ export const api = {
   sessions: () => request<{ sessions: SessionInfo[] }>('/security/sessions'),
   revokeSession: (sessionId: number) =>
     request<{ revoked: number }>(`/security/sessions/${sessionId}/revoke`, { method: 'POST' }),
+  sdkCall: (tool: string, args: Record<string, unknown>) =>
+    request<SdkCallResult>('/sdk/call', {
+      method: 'POST',
+      body: JSON.stringify({ tool, args }),
+    }),
+  dryRunParse: (oldSpec: string, newSpec: string) =>
+    request<DryRunParseResponse>('/dryrun/parse', {
+      method: 'POST',
+      body: JSON.stringify({ old_spec: oldSpec, new_spec: newSpec }),
+    }),
+  dryRunAnalyze: (payload: {
+    oldSpec: string
+    newSpec: string
+    operation: string
+    originalRequest: Record<string, unknown>
+    error: Record<string, unknown>
+  }) =>
+    request<DryRunResult>('/dryrun/analyze', {
+      method: 'POST',
+      body: JSON.stringify({
+        old_spec: payload.oldSpec,
+        new_spec: payload.newSpec,
+        operation: payload.operation,
+        original_request: payload.originalRequest,
+        error: payload.error,
+      }),
+    }),
 }

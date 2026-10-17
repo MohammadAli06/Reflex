@@ -189,6 +189,47 @@ export function SecuritySection() {
             public key and verifies before diffing. Pinning one key is a prototype trust model.
           </p>
         </Panel>
+
+        <Panel
+          title="Access & guardrails"
+          actions={
+            status.data?.auth ? (
+              status.data.auth.sdk_mode === 'key_required'
+                ? <Chip tone="ok">SDK key required</Chip>
+                : <Chip tone="mute">Open (no keys)</Chip>
+            ) : (
+              <Chip tone="mute">Unknown</Chip>
+            )
+          }
+        >
+          <div className="con-grid-2">
+            <Metric
+              label="Active SDK keys"
+              value={status.data?.auth ? String(status.data.auth.active_sdk_keys) : DASH}
+            />
+            <Metric
+              label="Roles"
+              value={status.data?.auth ? status.data.auth.roles.join(' + ') : DASH}
+            />
+            <Metric
+              label="Open breakers"
+              value={
+                status.data?.breakers
+                  ? String(Object.values(status.data.breakers).filter((b) => b.state === 'open').length)
+                  : DASH
+              }
+            />
+            <Metric
+              label="Outbound hosts"
+              value={status.data?.hosts ? status.data.hosts.join(', ') || DASH : DASH}
+            />
+          </div>
+          <p className="con-sub" style={{ marginTop: 'var(--s3)' }}>
+            Operator routes require a signed-in session; SDK calls require a key once one has been
+            created. Login and SDK calls are rate limited in the backend — this panel shows only
+            what the backend reports.
+          </p>
+        </Panel>
       </div>
 
       <Panel

@@ -45,6 +45,8 @@ class AuditEntry:
     # Additive (LLM fallback): model, prompt hash, latency, confidence, verdict.
     # Never the prompt body. Old entries simply lack this key when read back.
     llm_meta: dict[str, Any] | None = None
+    # Additive (security phase): provenance of the spec a patch was built from.
+    provenance: dict[str, Any] | None = None
     ts: str = field(default_factory=_now)
 
     def to_dict(self) -> dict[str, Any]:

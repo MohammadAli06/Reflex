@@ -37,6 +37,7 @@ class ReflexResult:
     error: str | None
     attempts: int
     schema_attempts: int
+    healing_path: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -55,4 +56,5 @@ class ReflexResult:
             reason_code=data.get("reason_code"), error=data.get("error"),
             attempts=int(data.get("attempts", 0)),
             schema_attempts=int(data.get("schema_attempts", 0)),
+            healing_path=data.get("healing_path") if isinstance(data.get("healing_path"), str) else None,
         )

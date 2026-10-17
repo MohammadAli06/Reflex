@@ -89,9 +89,9 @@ The React console implements an industrial "Suture" dark aesthetic with strict d
 | **Schema** | `/console/schema` | Live active schema viewer, mutation trigger (M_RENAME, M_NEST, etc.), consistency checker | `/api/schema`, `/api/mutations`, `/api/mutate`, `/api/consistency` |
 | **Comparison** | `/console/compare` | Head-to-head Baseline vs Reflex test runner with real-time SSE execution trace | `/api/cases`, `/api/runs`, SSE `/api/runs/{id}/events` |
 | **Runs** | `/console/runs(:runId)` | Event timeline per run with the audit decision pinned below, plus the decision ledger (old Trace + Audit merged) | `/api/runs`, `/api/runs/{id}/events`, `/api/audit` |
-| **Benchmarks** | `/console/benchmarks` | Scorecard (perf matrix), Real-world (vendored spec cases), Reliability (split analysis with 95% CIs) — one scorecard, no duplicates | `/api/metrics`, `/api/realworld/cases`, `/api/evaluation/config` |
+| **Benchmarks** | `/console/benchmarks` | Scorecard (perf matrix), Real-world (vendored spec cases + offline "Try your own API" dry-run panel), Reliability (split analysis with 95% CIs) — one scorecard, no duplicates | `/api/metrics`, `/api/realworld/cases`, `/api/evaluation/config`, `/api/dryrun/parse`, `/api/dryrun/analyze` |
 | **Safety** | `/console/safety` | 6 mandatory refusal scenarios (lossy types, ambiguous mappings, missing auth, etc.) | `/api/scenarios`, `/api/scenarios/{id}/run` |
-| **Settings** | `/console/settings` | What the backend enforces today (guardrails, signing, sessions, tamper demo) + SDK snippet and Control API URL | `/api/status`, `/api/security/status`, `/api/security/sessions` |
+| **Settings** | `/console/settings` | What the backend enforces today (guardrails, signing, sessions, tamper demo) + Integration panel: Python/PowerShell/curl SDK snippets, copy, and a real "Run this" sample call against `/api/sdk/call` | `/api/status`, `/api/security/status`, `/api/security/sessions`, `/api/sdk/call`, `/api/runs/{id}` |
 
 *Old routes redirect: `/console/trace` → `/console/runs`, `/console/audit` → `/console/runs?tab=ledger`, `/console/results` → `/console/benchmarks`, `/console/real-world` → `/console/benchmarks?tab=real-world`, `/console/evaluation` → `/console/benchmarks?tab=reliability`, `/console/security` → `/console/settings`. Spec Watch and Payments Sandbox live behind `VITE_SHOW_PLANNED` (default off) and redirect to `/console`. The operator menu in the topbar covers session removal.*
 
@@ -123,6 +123,34 @@ If the UI or network fails during the demo:
 
 ```bash
 cd backend && python cli/demo.py
+```
+
+## SDK live demo CLI
+
+`reflex_sdk` also ships a live end-to-end demo command that prints only real
+responses and the timings recorded in the run (no stopwatch, no scripted
+output):
+
+```bash
+cd backend
+python -m reflex_sdk demo                          # first available mutation
+python -m reflex_sdk demo --mutation M_NEST_TYPE_HEADER --reset
+python -m reflex_sdk demo --json --no-color > demo.json
+```
+
+Sequence: health checks for both services, a real mock mutation (needs
+`ADMIN_KEY`), a real baseline call direct against the mock (old schema, no
+healing), the real `/api/sdk/call` (outcome, reason code, `healing_path`,
+registry revision change, recorded recovery time), optional `--reset`.
+Exit code 0 only when Reflex recovers. Unreachable services print which one
+and exit non-zero without a traceback.
+
+```text
+[ok] Control API reachable
+[ok] Mock API reachable
+Mutation 'M_NEST_TYPE_HEADER': applied, mock schema version 2
+[break] Baseline POST http://localhost:8000/api/v1/users/fetch -> HTTP 422: validation_failed
+[healed] outcome recovered, reason -, path rule, attempts 2, rev 1 -> 2, recorded recovery 0.412s, run 8d61a0b2c114
 ```
 
 ## Python SDK
@@ -164,6 +192,71 @@ Schema page (or its existing Control API endpoint), then call the SDK function:
 are visible in **Runs** and the **Decision ledger**. Calls made directly to a
 target API do not pass through Reflex and therefore cannot be healed or
 observed by this SDK.
+
+## Try your own API (dry-run)
+
+Benchmarks > Real-world > **Try your own API** runs the real rule pipeline
+(`classify` → `diff_schemas` → `hypothesize` → the flag-gated LLM fallback →
+`validate_patch`) against **pasted** OpenAPI specs and a failing request.
+`POST /api/dryrun/analyze` answers what Reflex *would* do; nothing is sent
+anywhere, nothing is persisted — dry-run results never touch `/api/metrics`,
+run records or the audit chain.
+
+- Specs: JSON or YAML (`yaml.safe_load` only), 512 KB per document, 64 KB per
+  payload, JSON depth limit, local `#/components/schemas/` refs only — remote
+  `$ref`s are refused (SSRF), never fetched.
+- `POST /api/dryrun/parse` lists the operations in the two pasted docs so the
+  UI can auto-fill the operation picker (uses the same bounded parser).
+- Response: `outcome` (`proposed` / `refused` / `no_drift`), `source`
+  (`rule` / `llm` / refusal source), reason code, drift classification, schema
+  diff, candidate patch, validator checks, and the corrected request that
+  would be sent (header **names + provenance only**, body values only if
+  derivable from the original request; otherwise a
+   `missing_required_value` refusal). Secrets and payload values never
+   re-appear in unexpected fields.
+
+## Security Enforcements (backend-enforced, hardened demo)
+
+`app/security/policy.py` is the single source of truth: all limits, the route
+role table and the guard defaults are loaded from env with demo-generous
+values (a normal demo is never throttled — login 10/min/IP, operator
+mutators 120/min, SDK calls 60/min, dry-run 20/min).
+
+- **Roles:** `operator` (bcrypt session cookie — `/api/console` login) and
+  `sdk` (`X-Api-Key`, hashed with sha256 in the DB, shown once at creation,
+  revocable, constant-time compared). `/api/sdk/call` stays open until the
+  first SDK key is created (demo-friendly default) and is key-gated after.
+- **Route gating (deny by default):** every `/api` route is classified
+  public/operator/sdk in one table; unknown paths are refused 404. Operator
+  routes (mutate/reset/runs/scenarios/tamper/realworld-build/dry-run/audit
+  reads/security keys/registry rollback) require the session; 429s and auth
+  failures are audited. Login is throttled per IP (429 + `Retry-After`).
+- **Request validation:** all request models forbid extra fields with
+  bounded types; body-size, header-count and header-size caps are enforced at
+  the boundary.
+- **SSRF guard:** every outbound call goes through `GuardedClient` — host
+  allowlisted by name, DNS resolution re-checked, addresses constraint
+  checked, redirects never followed, response sizes capped.
+- **Retry budget / loop detection / breaker:** per-run patch-attempt and
+  total-retry budgets, a payload-fingerprint loop detector, and per-host
+  circuit breakers (open → half-open probe → closed) with fast rejection.
+  Budget exhaustion and breaker trips carry reason codes
+  (`retry_budget_exceeded`, `loop_detected`, `circuit_open`) and refuse.
+- **Fail-closed patching:** the "applied" audit entry is written before the
+  registry CAS; an audit-write failure aborts the patch
+  (`audit_unavailable`). Rollback is operator-only, CAS on the seen
+  revision, audited before the restore.
+- **Redaction:** one boundary chain (key rules + planted secrets +
+  bearer/JWT text scrubbing) applies before audit, SSE, records and error
+  responses.
+- **Status UI:** `/api/security/status` (operator-only) exposes only real
+  enforced state (auth mode, active keys, limits + hits, breakers, hosts,
+  chain). The Settings page renders exactly those fields; anything missing
+  is a dash. No toggles.
+
+Known honesty limits: counters are in-memory (swap-in store design), the
+audit chain is change-tracking (not proof of authorship), and provenance
+hash-pinning is implicit because every spec fetch is failure-triggered.
 
 ## Security & Reliability Notes
 

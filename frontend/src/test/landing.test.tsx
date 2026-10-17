@@ -41,7 +41,7 @@ describe('LandingPage', () => {
     function stub(jsonBody: unknown) {
       vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
         ok: true, status: 200, json: () => Promise.resolve(jsonBody), text: () => '',
-      } as Response)))
+      } as unknown as Response)))
     }
     // Flag off (the real default): no fallback claim at all.
     stub({ overall: {}, available: false, status: { mock_api_reachable: true, llm_repair_enabled: false } })

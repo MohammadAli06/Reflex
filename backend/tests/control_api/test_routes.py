@@ -10,6 +10,8 @@ from app.config import load_settings
 from app.control_api.main import create_app as create_control_app
 from app.mock_api.main import create_app as create_mock_app
 
+from ..support.auth import login_operator
+
 ADMIN_KEY = "test-admin-key"
 TENANT_TOKEN = "tenant-secret-value"
 
@@ -30,6 +32,7 @@ def clients(tmp_path):
     mock_client.__enter__()
     control_client = TestClient(create_control_app(settings, mock_client=mock_client))
     control_client.__enter__()
+    login_operator(control_client)  # operator routes are session-gated
     try:
         yield control_client
     finally:

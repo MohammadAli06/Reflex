@@ -27,6 +27,47 @@ No secrets are stored here.
   validate/CAS/audit/rollback path. `healing_path` (`rule`/`llm`) is the
   recorded source; prompt bodies are never logged (only their SHA-256), and the
   prompt carries field names/types plus a truncated, value-scrubbed error body.
+- Integration panel + CLI: the Settings panel now shows real Python/PowerShell/
+  curl snippets for `/api/sdk/call` (the old snippet called APIs that did not
+  exist), each with copy, plus a real "Run this" sample call that shows actual
+  HTTP status/body/outcome and the recovery time recorded on the run record —
+  never a stopwatch, never invented values. `python -m reflex_sdk demo` drives
+  health checks, a real mock mutation (ADMIN_KEY from settings), a real direct
+  baseline call built from `/api/sdk/tools` definitions, the real SDK call
+  (outcome/reason/`healing_path`, registry revision before→after from
+  `/api/registry`, recorded recovery), and opt-in `--reset`. `reflex-demo`
+  console script was skipped — repo has no packaging, and adding pyproject.toml
+  is out of scope.
+- Try-your-own-API dry-run: `app/dryrun/engine.py` reuses the real pipeline as
+  pure functions (classifier/diff/hypothesize/validator + the flag-gated LLM
+  gate) on pasted specs (JSON or `yaml.safe_load` YAML, 512 KB/64 KB caps, JSON
+  depth limit, local-only `$ref` with cycle guard — remote refs never fetch).
+  Endpoints `POST /api/dryrun/analyze` and `POST /api/dryrun/parse` make zero
+  outbound calls (test-enforced by blocking the real HTTP transports) and
+  persist nothing: metrics, runs and the audit chain are untouched by design.
+  The Benchmarks › Real-world tab gains a `Reviewed cases | Try your own API`
+  toggle with an example-filled panel reusing SchemaDiffView, ValidatorChecks
+  and DefinitionSplit; refusals render first-class; the banner is always
+  present.
+- Security phase (hardened demo): `app/security/` (policy/throttle/budget/
+  ssrf/repair_policies) is one source of truth for limits, the route role
+  table and guard defaults. Operator routes are session-gated (bcrypt login),
+  SDK keys are sha256-hashed with show-once creation + revocation + last-used
+  + minimum-time compare, `/api/sdk/call` is open until the first key exists
+  then key-gated; unknown /api routes are refused 404 (deny-by-default,
+  test-enumerated). SSRF: `GuardedClient` enforces the host allowlist +
+  resolution checks + no redirects + response caps for ALL outbound calls
+  (executor, schema fetch, control-to-mock). RunBudget + payload fingerprints
+  + per-host breakers refuse with new codes `retry_budget_exceeded`,
+  `loop_detected`, `circuit_open`; repair policies refuse `overbroad_patch`
+  and map number/float transitions to `unsafe_conversion` instead of
+  no_evidence; patching is fail-closed (audit-before-CAS, failures refuse
+  `audit_unavailable`) and provenance (host/sha/version/signature) is recorded
+  on every applied patch entry. Operator-only `POST /api/registry/rollback`
+  CAS-restores a revision, audited-first. `/api/security/status` (operator)
+  reports only real enforced state; the Settings page renders exactly that
+  and the SDK copy adapts to the real key state. Bearer/JWT strings are
+  masked with the stable "[REDACTED]" marker at every redaction boundary.
 - Frontend forced to `NODE_ENV=test` under Vitest so React's dev build is used.
 - Control API (8001) persists to SQLite (`data/reflex.db`, SQLAlchemy 2.0,
   WAL + busy_timeout); mock API (8000) stays in-memory. Postgres later = one
@@ -146,19 +187,36 @@ No secrets are stored here.
 
 ## Evidence
 
-- Backend: `python -m pytest -q` → 130 passed (110 pre-LLM-fallback + 20 new
-  in `tests/healing/test_llm_fallback.py`: flag-off identity,
-  rules-primacy, one-proposal-per-event, invalid outputs, validator
-  rejection, rollback-on-failed-retry, provider errors, prompt sanitization
-  (planted secret and payload value absent), injection containment, audit
-  fields, per-source metrics, SDK `healing_path`). Flag-off real-source run
-  unchanged: 1 case, baseline failed, Reflex recovered, `wrong_patches=0`.
-- Frontend: `npm run build` succeeds; `npm run test:run` → 71 passed
-  (64 pre-change + 6 LLM-fallback UI tests: decision-card
-  Rules/LLM-fallback/dash, Reflex-lane chips, Settings real fallback state +
-  dash for absent field, Landing copy quiet while the flag is off).
+- Backend: `python -m pytest -q` → 175 passed: the LLM fallback (20), CLI demo
+  (8), dry-run (11) plus the security phase (26 new): `test_security.py`
+  (route classification enumeration + deny-by-default, auth matrix, key
+  lifecycle, oversize/header caps, SSRF loopback/metadata/rebinding,
+  redirect 307 handling, 429+Retry-After, demo-flow-unthrottled) and
+  `test_guardrails.py` (budget caps + loop fingerprints, breaker state
+  machine incl. half-open, healer circuit-open refusal, overbroad-policy
+  check, provenance on applied patches, fail-closed audit, operator
+  rollback success/stale/missed + audited, JWT/bearer masking, unsafe
+  conversion refusal). Flag-off real-source run unchanged: 1 case, baseline
+  failed, Reflex recovered, `wrong_patches=0`.
+- Frontend: `npm run build` succeeds; `npm run test:run` → 82 passed
+  (79 pre-security + 3: real access state rendered from the backend status,
+  dashes when the fields are absent, integration copy adapting to the SDK
+  key state).
+- Live default-config demo: `python -m reflex_sdk demo --mutation
+  M_NEST_TYPE_HEADER --reset --no-color` → recovered in one patch attempt
+  (recorded recovery 0.006s) with the security layer on; live HTTP flow:
+  unauthenticated `POST /api/mutate` → 401 'authentication required', login
+  → 200, mutate → 200, `auth_required` events visible on the audit chain,
+  logout → blocked again. Normal demo usage is never throttled (limits: 10
+  login / 120 operator / 60 SDK / 20 dry-run per minute).
 - Real-spec benchmark: `python -m app.runner.run_suite --source real` →
   1 case, baseline `failed`, Reflex `recovered`, `wrong_patches=0`.
+- Live servers: `python -m reflex_sdk demo --mutation M_NEST_TYPE_HEADER
+  --reset --no-color` prints real steps (mutation applied, baseline 4xx,
+  healed attempt 2, recorded recovery 0.009s/0.006s, reset applied).
+- Live dry-run: POST /api/dryrun/analyze with the demo specs → 200
+  `proposed` / `source=rule` / corrected body `{"account": {"id": "123"}}`,
+  and `/api/metrics` identical before and after.
 - Fuzz: `--fuzz 200 --seed 7` → 200 cases, `wrong_patches=0`.
 - Provenance: tampered `/openapi.json` → `refused` / `untrusted_schema` with the
   registry revision unchanged (API and scenario paths both).

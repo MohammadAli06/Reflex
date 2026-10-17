@@ -21,6 +21,7 @@ from .models import (
     Run,
     RunRecordRow,
     SchemaSnapshot,
+    SdkKeyRow,
     SessionRow,
     ToolRevision,
     TraceEventRow,
@@ -186,6 +187,17 @@ class ToolRevisionRepo:
             ).scalars().all()
             return [{"revision": r.revision, "created_by_run": r.created_by_run,
                      "reason": r.reason, "created_at": r.created_at} for r in rows]
+
+    def definition_at(self, tool_name: str, revision: int) -> dict[str, Any] | None:
+        """The tool definition recorded at a specific revision."""
+        with session_scope(self._db) as session:
+            row = session.execute(
+                select(ToolRevision).where(ToolRevision.tool_name == tool_name,
+                                           ToolRevision.revision == revision)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return json.loads(row.definition_json)
 
 
 class RunRepo:
@@ -433,6 +445,87 @@ class SessionRepo:
             return int(result.rowcount or 0)
 
 
+SDK_KEY_PREFIX = "rxk_"
+
+
+class SdkKeyRepo:
+    """Hashed SDK/agent keys. The plaintext is returned exactly once.
+
+    Lookup hashes the presented key and compares digest strings with
+    ``secrets.compare_digest`` - timing-safe given fixed-length digests. The
+    plaintext value never lands in the database or in any response after
+    creation.
+    """
+
+    def __init__(self, database_url: str) -> None:
+        self._db = database_url
+
+    @staticmethod
+    def _hash_value(key: str) -> str:
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+    def create(self, label: str = "") -> dict[str, Any]:
+        plaintext = SDK_KEY_PREFIX + secrets.token_urlsafe(24)
+        key_hash = self._hash_value(plaintext)
+        with session_scope(self._db) as session:
+            row = SdkKeyRow(key_hash=key_hash, label=label[:128])
+            session.add(row)
+            session.flush()
+            return {
+                "id": row.id,
+                "label": row.label,
+                "key": plaintext,  # shown once; never persisted in plaintext
+                "key_hash": key_hash,
+                "created_at": row.created_at,
+            }
+
+    def find_active(self, presented: str) -> dict[str, Any] | None:
+        """Return key metadata (never the value we hashed) for a valid key."""
+        presented = (presented or "").strip()
+        if not presented:
+            return None
+        candidate = self._hash_value(presented)
+        with session_scope(self._db) as session:
+            rows = session.execute(
+                select(SdkKeyRow).where(SdkKeyRow.revoked_at.is_(None))
+            ).scalars().all()
+            for row in rows:
+                if secrets.compare_digest(candidate, row.key_hash):
+                    return {"id": row.id, "label": row.label}
+        return None
+
+    def touch_last_used(self, key_id: int) -> None:
+        with session_scope(self._db) as session:
+            row = session.query(SdkKeyRow).get(key_id)
+            if row is not None:
+                row.last_used_at = _utcnow()
+
+    def count_active(self) -> int:
+        with session_scope(self._db) as session:
+            return int(session.execute(
+                select(func.count(SdkKeyRow.id))
+                .where(SdkKeyRow.revoked_at.is_(None))).scalar() or 0)
+
+    def list_active(self) -> list[dict[str, Any]]:
+        """Metadata only: ids, labels, usage - never key material."""
+        with session_scope(self._db) as session:
+            rows = session.execute(
+                select(SdkKeyRow).where(SdkKeyRow.revoked_at.is_(None))
+                .order_by(SdkKeyRow.id.asc())).scalars().all()
+            return [{
+                "id": row.id, "label": row.label,
+                "last_used_at": row.last_used_at, "created_at": row.created_at,
+            } for row in rows]
+
+    def revoke(self, key_id: int) -> bool:
+        with session_scope(self._db) as session:
+            row = session.query(SdkKeyRow).get(key_id)
+            if row is None or row.revoked_at is not None:
+                return False
+            row.revoked_at = _utcnow()
+            return True
+
+
 __all__ = [
     "GENESIS_HASH",
     "SESSION_TTL_HOURS",
@@ -446,4 +539,6 @@ __all__ = [
     "AuditRepo",
     "UserRepo",
     "SessionRepo",
+    "SdkKeyRepo",
+    "SDK_KEY_PREFIX",
 ]

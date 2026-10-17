@@ -160,6 +160,71 @@ export interface RunSummary {
   exchanges?: TraceEvent[]
 }
 
+/** Real POST /api/sdk/call response (backend constructs it from the run). */
+export interface SdkCallResult {
+  run_id: string
+  outcome: string
+  healed: boolean
+  data?: unknown
+  reason_code: string | null
+  error: string | null
+  attempts: number
+  schema_attempts: number
+  healing_path: string
+}
+
+export interface DryRunOperation {
+  method: string
+  path: string
+  has_json_body?: boolean
+}
+
+export interface DryRunParseResponse {
+  old_operations: DryRunOperation[]
+  new_operations: DryRunOperation[]
+  shared_operations: DryRunOperation[]
+}
+
+/** Real POST /api/dryrun/analyze response — offline pipeline, nothing persisted. */
+export interface DryRunResult {
+  kind: 'dryrun'
+  outcome: 'proposed' | 'refused' | 'no_drift'
+  source: string
+  reason_code: string | null
+  drift_classification: string
+  diff: {
+    endpoint?: string
+    removed?: string[]
+    added?: string[]
+    type_changed?: { path: string; from: string | null; to: string | null }[]
+    added_headers?: (string | Record<string, unknown> | { name: string; format?: string | null })[]
+    removed_headers?: (string | Record<string, unknown> | { name: string; format?: string | null })[]
+  } | null
+  candidate: {
+    new_bindings: Record<string, unknown>
+    new_required_headers: unknown[]
+    conversions: Record<string, string>
+    evidence: string[]
+    confidence: number
+  } | null
+  validation: {
+    ok: boolean
+    errors: string[]
+    reason_code: string | null
+    needs_human: boolean
+  } | null
+  corrected_request: {
+    method: string
+    path: string
+    headers: Record<string, unknown>
+    body: unknown
+  } | null
+  missing_values: string[]
+  before_definition?: unknown
+  after_definition?: unknown
+  llm_meta?: Record<string, unknown> | null
+}
+
 export interface AuditEntry {
   ts: string
   run_id: string
@@ -288,6 +353,12 @@ export interface SecurityStatus {
   provenance: Provenance
   signing_enabled: boolean
   persistence_error?: string | null
+  /** Additive (security phase): only real, enforced backend state. */
+  auth?: { roles: string[]; sdk_mode: 'open_no_keys' | 'key_required'; active_sdk_keys: number }
+  limits?: Record<string, unknown>
+  throttle_hits?: Record<string, number>
+  breakers?: Record<string, { state: string; recent_failures: number }>
+  hosts?: string[]
 }
 
 export interface SessionInfo {

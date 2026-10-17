@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 
 from ..healing.conversions import convert_value
 from ..healing.secrets import SecretsProvider
+from ..security.ssrf import CircuitOpen, ResponseTooLarge, SsrfBlocked
 from ..schema_utils import set_in
 from .tools import ToolDefinition
 
@@ -141,6 +142,7 @@ class Executor:
 
     def call(self, prepared: PreparedRequest) -> CallResult:
         started = time.perf_counter()
+        self._breaker_guard_tick(prepared)
         try:
             response = self._client.request(
                 prepared.method, prepared.endpoint, json=prepared.body, headers=prepared.headers,
@@ -152,6 +154,18 @@ class Executor:
         except httpx.TransportError:
             return CallResult(status=None, ok=False, error_type="connection",
                               latency_s=time.perf_counter() - started)
+        except CircuitOpen as exc:
+            return CallResult(status=None, ok=False, error_type="circuit_open",
+                              latency_s=time.perf_counter() - started,
+                              raw_text=str(exc))
+        except ResponseTooLarge as exc:
+            return CallResult(status=None, ok=False, error_type="response_too_large",
+                              latency_s=time.perf_counter() - started,
+                              raw_text=str(exc))
+        except SsrfBlocked as exc:
+            return CallResult(status=None, ok=False, error_type="ssrf_blocked",
+                              latency_s=time.perf_counter() - started,
+                              raw_text=str(exc))
 
         latency = time.perf_counter() - started
         try:
@@ -166,6 +180,17 @@ class Executor:
             latency_s=latency,
             header_names=sorted(k for k in response.headers.keys()),
         )
+
+    def _breaker_guard_tick(self, prepared: PreparedRequest) -> None:
+        """Manual fast-reject for injectable breakers (no guarded client)."""
+        breaker = getattr(self, "breaker", None)
+        if breaker is None or self._client is None:
+            return
+        host = str(self._client.base_url or "").split("://")[-1].split("/")[0]
+        if host and breaker.check_call(host) == "open":
+            from ..security.ssrf import CircuitOpen
+
+            raise CircuitOpen(f"circuit breaker is open for host {host!r}")
 
     def execute(
         self, definition: ToolDefinition, args: dict[str, Any], *, dry_run: bool = False

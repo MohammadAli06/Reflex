@@ -6,6 +6,7 @@ Large payloads are capped with a ``truncated`` flag instead of being dropped.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -16,6 +17,17 @@ _SENSITIVE_KEY_PARTS = (
     "authorization", "credential", "cookie", "key",
 )
 REDACTED = "[REDACTED]"
+
+#: Credential-shaped strings masked inside free text (bearer tokens and JWTs).
+_BEARER_RE = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=\-]+", re.IGNORECASE)
+_JWT_RE = re.compile(r"\beyJ[A-Za-z0-9._\-]{10,}\.[A-Za-z0-9._\-]{6,}\b")
+
+
+def scrub_credential_text(text: str) -> str:
+    """Mask credential-looking strings inside free text with a stable marker."""
+    if not isinstance(text, str) or not text:
+        return text
+    return _JWT_RE.sub(REDACTED, _BEARER_RE.sub(REDACTED, text))
 
 #: Per-field byte cap for exchange text fields.
 BODY_CAP_BYTES = 4096
@@ -29,7 +41,8 @@ def is_sensitive_key(key: str) -> bool:
 
 
 def redact(obj: Any) -> Any:
-    """Deep-redact sensitive keys and string values. One reusable entry point."""
+    """Deep-redact sensitive keys and credential-shaped string values. One
+    reusable entry point."""
     if isinstance(obj, dict):
         result = {}
         for key, value in obj.items():
@@ -40,6 +53,8 @@ def redact(obj: Any) -> Any:
         return result
     if isinstance(obj, list):
         return [redact(value) for value in obj]
+    if isinstance(obj, str):
+        return scrub_credential_text(obj)
     return obj
 
 

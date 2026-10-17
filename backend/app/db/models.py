@@ -114,3 +114,16 @@ class SessionRow(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     expires_at: Mapped[str] = mapped_column(String(40))
     created_at: Mapped[str] = mapped_column(String(40), default=_utcnow)
+
+
+class SdkKeyRow(Base):
+    """A hashed SDK/agent API key. The plaintext is shown once at creation."""
+
+    __tablename__ = "sdk_keys"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    key_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    last_used_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    revoked_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), default=_utcnow)

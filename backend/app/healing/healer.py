@@ -8,9 +8,12 @@ materially different change.
 from __future__ import annotations
 
 import copy
+import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -44,6 +47,9 @@ from .schema_diff import diff_schemas
 from .schema_fetch import UntrustedSchemaError, fetch_verified
 from .secrets import SecretsProvider
 from .validate import validate_patch
+from ..security.budget import RunBudget
+from ..security.policy import load_security_policy
+from ..security.repair_policies import check_repair_policies
 
 BACKOFF_S = 0.05
 
@@ -108,6 +114,7 @@ class Healer:
         provenance_error_sink=None,
         mock_public_key: str = "",
         repair_proposer: RepairProposer | None = None,
+        policy=None,
     ) -> None:
         self._registry = registry
         self._executor = executor
@@ -122,6 +129,7 @@ class Healer:
         self._mock_public_key = mock_public_key
         self._repair_proposer = repair_proposer
         self._llm_repair_enabled = settings.llm_repair_enabled
+        self._policy = policy or load_security_policy(settings, env={})
 
     def _verified(self) -> "VerifiedSchema":
         """Fetch the schema with provenance checks applied when enabled.
@@ -172,6 +180,7 @@ class Healer:
         healing_path: str = "rule",
         llm_usage: dict[str, int] | None = None,
         llm_meta: dict[str, Any] | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> None:
         entry = AuditEntry(
             run_id=self._emitter.run_id,
@@ -190,8 +199,23 @@ class Healer:
             healing_path=healing_path,
             llm_usage=llm_usage or {"input": 0, "output": 0},
             llm_meta=llm_meta,
+            provenance=provenance,
         )
         self._audit.append(entry)
+
+    def _provenance(self, verified: Any) -> dict[str, Any]:
+        """Provenance of the spec a patch was built from (host names only)."""
+        try:
+            host = urlsplit(str(self._schema_client.base_url)).hostname or ""
+        except Exception:
+            host = ""
+        return {
+            "source_host": host,
+            "sha256": getattr(verified, "sha256", None),
+            "spec_version": getattr(verified, "version", None),
+            "signature_verified": bool(getattr(verified, "signature_verified", False)),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     def _llm_fallback(
         self,
@@ -244,11 +268,37 @@ class Healer:
         emitter = self._emitter
         max_schema = self._settings.max_schema_attempts
         max_infra = self._settings.max_infra_retries
+        budget = RunBudget(self._policy)
 
         outcome = HealOutcome(outcome="failed", definition=definition)
         t_break: float | None = None
         patched_once = False
         last_error_text = ""
+
+        def _fingerprint(current_prepared: PreparedRequest, current_result: CallResult) -> str:
+            """Loop detector key: identical payload + error shape, sent again."""
+            try:
+                body_repr = json.dumps(current_prepared.body, sort_keys=True, default=str)
+            except Exception:
+                body_repr = "<unserializable>"
+            return (f"{current_prepared.method}|{current_prepared.endpoint}|{body_repr}|"
+                    f"{current_result.status}|{current_result.error_summary()}")
+
+        def _refuse_budget(code: str, detail: str) -> HealOutcome:
+            emitter.emit("refused", reason_code=code, detail=detail)
+            try:
+                self._record_audit(definition, "refused", code,
+                                   verified_version=None, verified_hash=None,
+                                   old_definition=None, new_definition=None,
+                                   evidence=[detail], confidence=0.0,
+                                   error={"status": None, "body": detail})
+            except Exception:
+                pass
+            outcome.outcome, outcome.reason_code = "refused", code
+            outcome.t_break = t_break or time.perf_counter()
+            outcome.definition = definition
+            outcome.error_text = detail
+            return outcome
 
         # Initial attempt.
         try:
@@ -284,6 +334,37 @@ class Healer:
             if result.ok:
                 return self._finish_success(definition, result, outcome, t_break)
 
+            # Guardrail fast-paths: the breaker- and guard-level error types
+            # never go through drift classification.
+            if result.error_type == "circuit_open":
+                emitter.emit("refused", reason_code=rc.CIRCUIT_OPEN,
+                             detail=result.error_summary())
+                self._record_audit(definition, "refused", rc.CIRCUIT_OPEN,
+                                   verified_version=None, verified_hash=None,
+                                   old_definition=None, new_definition=None,
+                                   evidence=[result.error_summary() or "circuit breaker open"],
+                                   confidence=0.0,
+                                   error={"status": None, "body": result.error_summary()})
+                outcome.outcome, outcome.reason_code = "refused", rc.CIRCUIT_OPEN
+                outcome.t_break = t_break or time.perf_counter()
+                outcome.definition = definition
+                outcome.error_text = result.error_summary()
+                return outcome
+            if result.error_type in ("ssrf_blocked", "response_too_large"):
+                emitter.emit("refused", reason_code=rc.NOT_DRIFT,
+                             detail=result.error_summary())
+                self._record_audit(definition, "refused", rc.NOT_DRIFT,
+                                   verified_version=None, verified_hash=None,
+                                   old_definition=None, new_definition=None,
+                                   evidence=[result.error_summary() or "outbound call blocked"],
+                                   confidence=0.0,
+                                   error={"status": None, "body": result.error_summary()})
+                outcome.outcome, outcome.reason_code = "not_drift_reported", rc.NOT_DRIFT
+                outcome.t_break = t_break or time.perf_counter()
+                outcome.definition = definition
+                outcome.error_text = result.error_summary()
+                return outcome
+
             category = classify(result.status, result.error_type)
             emitter.emit("error_detected", status=result.status, error_type=result.error_type,
                          summary=result.error_summary())
@@ -318,6 +399,16 @@ class Healer:
 
                 if t_break is None:
                     t_break = time.perf_counter()
+
+                # Loop detection: the same payload producing the same error
+                # shape means nothing changed - stop instead of repeating.
+                if budget.check_loop(_fingerprint(prepared, result)):
+                    outcome.t_break = t_break
+                    return _refuse_budget(rc.LOOP_DETECTED, "same payload produced the same error again; no change made")
+                if budget.time_exceeded(self._policy.max_run_seconds):
+                    outcome.t_break = t_break
+                    return _refuse_budget(rc.RETRY_BUDGET_EXCEEDED,
+                                          f"run exceeded {self._policy.max_run_seconds}s wall time budget")
 
                 if outcome.schema_attempts >= max_schema:
                     emitter.emit("refused", reason_code=rc.RETRY_CAP_REACHED)
@@ -479,9 +570,82 @@ class Healer:
                     outcome.error_text = last_error_text
                     return outcome
 
-                # Apply with compare-and-swap.
+                # Safe-repair policies extend the validator: the patch may not
+                # touch anything the observed diff does not explain.
+                policy_refusal = check_repair_policies(patch, definition, diff)
+                if policy_refusal:
+                    emitter.emit("refused", reason_code=policy_refusal, errors=[])
+                    self._record_audit(definition, "refused", policy_refusal,
+                                       verified_version=verified.version,
+                                       verified_hash=verified.sha256,
+                                       old_definition=definition.to_dict(),
+                                       new_definition=patched_def.to_dict(),
+                                       evidence=patch.evidence, confidence=0.0,
+                                       error={"status": result.status, "body": result.error_summary()},
+                                       healing_path=patch.healing_path,
+                                       llm_usage=outcome.llm_tokens if llm_used else None)
+                    outcome.outcome, outcome.reason_code = "refused", policy_refusal
+                    outcome.t_break = t_break
+                    outcome.definition = definition
+                    outcome.patch = patch
+                    outcome.error_text = last_error_text
+                    return outcome
+
+                if not budget.register_patch():
+                    emitter.emit("refused", reason_code=rc.RETRY_BUDGET_EXCEEDED,
+                                 detail="patch attempt budget exhausted")
+                    self._record_audit(definition, "refused", rc.RETRY_BUDGET_EXCEEDED,
+                                       verified_version=verified.version,
+                                       verified_hash=verified.sha256,
+                                       old_definition=definition.to_dict(), new_definition=None,
+                                       evidence=["patch budget exhausted before apply"],
+                                       confidence=0.0,
+                                       error={"status": result.status, "body": result.error_summary()})
+                    outcome.outcome, outcome.reason_code = "refused", rc.RETRY_BUDGET_EXCEEDED
+                    outcome.t_break = t_break
+                    outcome.definition = definition
+                    outcome.error_text = last_error_text
+                    return outcome
+
+                # Apply with compare-and-swap. Audit-first (fail-closed): if the
+                # audit write cannot be made, the patch is not applied.
                 old_def_dict = definition.to_dict()
                 old_revision = definition.revision
+                if llm_used and outcome.llm_meta is not None:
+                    outcome.llm_meta["verdict"] = "applied"
+                try:
+                    self._record_audit(definition, "applied", None,
+                                       verified_version=verified.version,
+                                       verified_hash=verified.sha256,
+                                       old_definition=old_def_dict,
+                                       new_definition=patched_def.to_dict(),
+                                       evidence=patch.evidence, confidence=patch.confidence,
+                                       error={"status": result.status, "body": result.error_summary()},
+                                       healing_path=patch.healing_path,
+                                       llm_usage=outcome.llm_tokens if llm_used else None,
+                                       llm_meta=outcome.llm_meta if llm_used else None,
+                                       provenance=self._provenance(verified))
+                except Exception as exc:
+                    emitter.emit("refused", reason_code=rc.AUDIT_UNAVAILABLE, detail=str(exc))
+                    try:
+                        self._record_audit(definition, "refused", rc.AUDIT_UNAVAILABLE,
+                                           verified_version=verified.version,
+                                           verified_hash=verified.sha256,
+                                           old_definition=old_def_dict,
+                                           new_definition=patched_def.to_dict(),
+                                           evidence=[f"audit write failed; patch not applied: {exc}"],
+                                           confidence=0.0,
+                                           error={"status": result.status, "body": last_error_text},
+                                           healing_path=patch.healing_path,
+                                           llm_usage=outcome.llm_tokens if llm_used else None)
+                    except Exception:
+                        pass
+                    outcome.outcome, outcome.reason_code = "refused", rc.AUDIT_UNAVAILABLE
+                    outcome.t_break = t_break
+                    outcome.definition = definition
+                    outcome.patch = patch
+                    outcome.error_text = last_error_text
+                    return outcome
                 try:
                     definition = self._registry.apply(
                         definition.name, definition.revision, patched_def
@@ -496,19 +660,25 @@ class Healer:
                 emitter.emit("patch_applied", tool=definition.name, revision=definition.revision,
                              revision_before=old_revision,
                              conversions=patch.conversions, header_names=[h["name"] for h in definition.required_headers])
-                if llm_used and outcome.llm_meta is not None:
-                    outcome.llm_meta["verdict"] = "applied"
-                self._record_audit(definition, "applied", None,
-                                   verified_version=verified.version,
-                                   verified_hash=verified.sha256,
-                                   old_definition=old_def_dict,
-                                   new_definition=definition.to_dict(),
-                                   evidence=patch.evidence, confidence=patch.confidence,
-                                   error={"status": result.status, "body": result.error_summary()},
-                                   healing_path=patch.healing_path,
-                                   llm_usage=outcome.llm_tokens if llm_used else None,
-                                   llm_meta=outcome.llm_meta if llm_used else None)
 
+                if not budget.register_retry():
+                    emitter.emit("refused", reason_code=rc.RETRY_BUDGET_EXCEEDED,
+                                 detail="retry budget exhausted before the retry call")
+                    self._record_audit(definition, "refused", rc.RETRY_BUDGET_EXCEEDED,
+                                       verified_version=verified.version,
+                                       verified_hash=verified.sha256,
+                                       old_definition=old_def_dict,
+                                       new_definition=definition.to_dict(),
+                                       evidence=["retries exhausted; patched definition stays, no further calls"],
+                                       confidence=0.0,
+                                       error={"status": result.status, "body": result.error_summary()},
+                                       healing_path=patch.healing_path,
+                                       llm_usage=outcome.llm_tokens if llm_used else None)
+                    outcome.outcome, outcome.reason_code = "refused", rc.RETRY_BUDGET_EXCEEDED
+                    outcome.t_break = t_break
+                    outcome.definition = definition
+                    outcome.error_text = last_error_text
+                    return outcome
                 emitter.emit("retry", attempt=outcome.attempts + 1, revision=definition.revision)
                 try:
                     prepared = build_request(definition, args, self._secrets, dry_run=dry_run)
@@ -524,6 +694,9 @@ class Healer:
                 continue
 
             if category is Category.INFRA:
+                if not budget.register_retry():
+                    outcome.t_break = t_break or time.perf_counter()
+                    return _refuse_budget(rc.RETRY_BUDGET_EXCEEDED, "retry budget exhausted on infra retries")
                 outcome.infra_retries += 1
                 if outcome.infra_retries > max_infra:
                     emitter.emit("not_drift", reason_code=rc.NOT_DRIFT, detail=last_error_text)

@@ -20,6 +20,17 @@ LLM_INVALID_OUTPUT = "llm_invalid_output"
 LLM_VALIDATION_FAILED = "llm_validation_failed"
 LLM_UNAVAILABLE = "llm_unavailable"
 
+# Security guardrail refusals (phase: hardened demo).
+# NOTE: "schema unverified" is refused as the existing `untrusted_schema` code;
+# this codebase does not mint a second code for the same enforcement.
+RETRY_BUDGET_EXCEEDED = "retry_budget_exceeded"
+LOOP_DETECTED = "loop_detected"
+CIRCUIT_OPEN = "circuit_open"
+UNSAFE_CONVERSION = "unsafe_conversion"
+OVERBROAD_PATCH = "overbroad_patch"
+AUDIT_UNAVAILABLE = "audit_unavailable"
+SDK_KEY_REQUIRED = "sdk_key_required"
+
 ALL = {
     AMBIGUOUS_MAPPING,
     LOSSY_CONVERSION,
@@ -37,6 +48,13 @@ ALL = {
     LLM_INVALID_OUTPUT,
     LLM_VALIDATION_FAILED,
     LLM_UNAVAILABLE,
+    RETRY_BUDGET_EXCEEDED,
+    LOOP_DETECTED,
+    CIRCUIT_OPEN,
+    UNSAFE_CONVERSION,
+    OVERBROAD_PATCH,
+    AUDIT_UNAVAILABLE,
+    SDK_KEY_REQUIRED,
 }
 
 #: Refusals the LLM fallback may never try to override. Rules run first; when

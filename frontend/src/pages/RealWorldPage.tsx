@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { PageHead, Panel } from '../components/console'
 import { DataTable, type Column } from '../components/DataTable'
+import { DryRunPanel } from '../components/DryRunPanel'
 import { EmptyState, ErrorState, LoadingState } from '../components/StateViews'
 import { StatCard } from '../components/StatCard'
 import { StatusBadge } from '../components/StatusBadge'
@@ -11,6 +12,7 @@ import type { RealWorldCase } from '../types'
 import { DASH, num } from '../utils/format'
 
 type LabelFilter = 'all' | 'recoverable' | 'refuse_expected'
+type SectionView = 'reviewed' | 'dryrun'
 
 const POLL_MS = 500
 /** One baseline and one healing record per case. */
@@ -33,6 +35,7 @@ export function RealWorldPage() {
   const cases = useApi(() => api.realWorldCases(), [])
   const { reload } = cases
   const [label, setLabel] = useState<LabelFilter>('all')
+  const [view, setView] = useState<SectionView>('reviewed')
   const [active, setActive] = useState<ActiveRun | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -278,6 +281,17 @@ export function RealWorldPage() {
         </span>
       </div>
 
+      <div className="csegment" aria-label="Real-world section" data-testid="realworld-section-toggle">
+        {(['reviewed', 'dryrun'] as SectionView[]).map((value) => (
+          <button key={value} className={view === value ? 'on' : ''} onClick={() => setView(value)}>
+            {value === 'reviewed' ? 'Reviewed cases' : 'Try your own API'}
+          </button>
+        ))}
+      </div>
+
+      {view === 'dryrun' ? (
+        <DryRunPanel />
+      ) : (
       <Panel
         title="Benchmark cases"
         actions={
@@ -304,8 +318,9 @@ export function RealWorldPage() {
           />
         )}
       </Panel>
+      )}
 
-      {unreviewed.length > 0 && (
+      {view === 'reviewed' && unreviewed.length > 0 && (
         <div className="notice notice-warning">
           {unreviewed.length} case(s) are unreviewed and are not presented as benchmark ground truth.
           Only reviewed cases run when you press Run Benchmark.

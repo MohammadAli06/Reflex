@@ -6,6 +6,7 @@ holds the admin key, the Gemini key or header credentials.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
 from typing import Any
 
 import httpx
@@ -13,13 +14,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from ..audit.audit_log import AuditLog
+from ..audit.audit_log import AuditEntry, AuditLog
 from ..audit.canonical import canonical_hash, canonical_json, short_hash
 from ..config import Settings, get_settings
 from ..db import (
     AuditRepo,
     RunRecordRepo,
     RunRepo,
+    SdkKeyRepo,
     SchemaSnapshotRepo,
     SessionRepo,
     ToolRevisionRepo,
@@ -28,15 +30,30 @@ from ..db import (
     init_db,
 )
 from ..healing.events import Redactor
+from ..dryrun.engine import DryRunError
 from ..mock_api.signing import fingerprint
 from ..mock_api.mutations import list_mutations
+from ..registry.tool_registry import StaleRevisionError
 from ..runner.cases import list_cases
 from ..runner.harness import Harness
 from ..runner.metrics import compute_metrics
 from ..runner.records import RunRecord
 from ..runner.run_suite import load_records
 from ..schema_utils import sample_instance
-from .models import LoginRequest, MutateRequest, RunRequest, SDKCallRequest
+from ..security.budget import Breakers
+from ..security.policy import ROUTE_ROLES, classify_route, load_security_policy
+from ..security.ssrf import SsrfBlocked, make_guarded_client
+from ..security.throttle import RateLimiter
+from .models import (
+    DryRunAnalyzeRequest,
+    DryRunParseRequest,
+    LoginRequest,
+    MutateRequest,
+    RollbackRequest,
+    RunRequest,
+    SDKCallRequest,
+    SdkKeyCreateRequest,
+)
 from .run_manager import BusyError, RunManager
 from .scenarios import list_scenarios, run_scenario
 from .sse import stream_events
@@ -65,9 +82,17 @@ def _spec_view(openapi: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def create_app(settings: Settings | None = None, mock_client: httpx.Client | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    mock_client: httpx.Client | None = None,
+    *,
+    security_policy=None,
+) -> FastAPI:
     settings = settings or get_settings()
-    mock = mock_client or httpx.Client(base_url=settings.mock_api_url, timeout=5.0)
+    policy = security_policy or load_security_policy(settings)
+    throttle = RateLimiter()
+    breakers = Breakers(policy)
+    mock = mock_client or make_guarded_client(settings.mock_api_url, policy, breakers, timeout=5.0)
     db_error: str | None = None
     try:
         init_db(settings.database_url)
@@ -81,6 +106,7 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
     snapshot_repo = SchemaSnapshotRepo(settings.database_url)
     user_repo = UserRepo(settings.database_url)
     session_repo = SessionRepo(settings.database_url)
+    key_repo = SdkKeyRepo(settings.database_url)
     try:
         user_repo.ensure_user(settings.admin_username, settings.admin_password)
     except Exception as exc:
@@ -93,6 +119,11 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         "audit": audit_repo, "run": run_repo, "record": record_repo,
         "event": event_repo, "revision": revision_repo,
         "snapshot": snapshot_repo, "user": user_repo, "session": session_repo,
+        "keys": key_repo,
+    }
+    app.state.security = {
+        "policy": policy, "throttle": throttle, "breakers": breakers,
+        "key_repo": key_repo,
     }
     app.state.provenance = {
         "ok": None, "verified_at": None, "version": None, "sha256": None,
@@ -105,6 +136,121 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         CORSMiddleware, allow_origins=allowed_origins, allow_credentials=True,
         allow_methods=["*"], allow_headers=["*"],
     )
+
+    # --- security guard: route classification, auth, throttling ------------
+    # Registered before the origin guard so it runs closer to the transport.
+    def _client_ip(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
+
+    def _match_template(path: str) -> str | None:
+        """Map a concrete /api path onto one of the classified templates.
+
+        ROUTE_ROLES items are ((method, template), role): sort by template
+        length and unpack the key tuple explicitly.
+        """
+        path_parts = path.split("/")
+        for key in sorted(ROUTE_ROLES, key=lambda k: len(k[1])):
+            _, template = key
+            parts = template.split("/")
+            if len(parts) != len(path_parts):
+                continue
+            for actual, wanted in zip(path_parts, parts):
+                if actual != wanted and not wanted.startswith("{"):
+                    break
+            else:
+                return template
+        return None
+
+    def _security_event(reason_code: str, summary: str) -> None:
+        """Security events ride the real audit chain; never block on write."""
+        entry = AuditEntry(
+            run_id="", tool=summary[:64], error={"summary": summary[:256]},
+            classification="security_event", schema_version_before=None,
+            schema_version_after=None, schema_sha256="", old_definition=None,
+            new_definition=None, evidence=[summary[:256]], confidence=0.0,
+            outcome="security_event", reason_code=reason_code,
+            healing_path="security",
+        )
+        try:
+            audit.append(entry)
+        except Exception:
+            pass  # an audit outage is surfaced by /api/security/status chain check
+
+    def _deny_429(retry_after: int) -> JSONResponse:
+        return JSONResponse(
+            status_code=429, content={"detail": "rate limit exceeded"},
+            headers={"Retry-After": str(max(1, retry_after))},
+        )
+
+    @app.middleware("http")
+    async def security_guard(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/"):
+            return await call_next(request)
+        method = request.method.upper()
+        template = _match_template(path)
+        role = classify_route(method, template) if template else ""
+        if not role:
+            # Deny by default: unclassified /api routes do not exist.
+            return JSONResponse(status_code=404, content={"detail": "not found"})
+        identity = _client_ip(request)
+
+        # Request-shape caps, enforced at the boundary (every /api route).
+        if method in {"POST", "PUT", "PATCH", "DELETE"}:
+            declared = request.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > policy.max_request_bytes:
+                _security_event("payload_too_large", f"{method} {path}")
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            if len(request.headers) > policy.max_header_count:
+                return JSONResponse(status_code=400, content={"detail": "too many request headers"})
+            header_bytes = sum(len(k) + len(v) for k, v in request.headers.items())
+            if header_bytes > policy.max_header_bytes:
+                return JSONResponse(status_code=400, content={"detail": "request headers too large"})
+
+        if role == "public":
+            if template == "/api/login":
+                allowed, retry_after = throttle.check(
+                    "login", identity, policy.login_limit, policy.rate_window_s)
+                if not allowed:
+                    return _deny_429(retry_after)
+            return await call_next(request)
+
+        if role == "operator":
+            allowed, retry_after = throttle.check(
+                "operator", identity, policy.operator_limit, policy.rate_window_s)
+            if not allowed:
+                _security_event("rate_limited", f"{method} {path}")
+                return _deny_429(retry_after)
+            if template == "/api/dryrun/parse" or template == "/api/dryrun/analyze":
+                allowed, retry_after = throttle.check(
+                    "dryrun", identity, policy.dryrun_limit, policy.rate_window_s)
+                if not allowed:
+                    _security_event("rate_limited", f"{method} {path}")
+                    return _deny_429(retry_after)
+            user = _current_user(request)
+            if user is None:
+                _security_event("auth_required", f"{method} {path}")
+                return JSONResponse(status_code=401, content={"detail": "authentication required"})
+            request.state.actor = user["username"]
+            return await call_next(request)
+
+        # sdk role: calls are open while zero keys exist (demo-friendly), and
+        # enforced the moment any key has been created.
+        allowed, retry_after = throttle.check(
+            "sdk_call", identity, policy.sdk_call_limit, policy.rate_window_s)
+        if not allowed:
+            _security_event("rate_limited", f"{method} {path}")
+            return _deny_429(retry_after)
+        if key_repo.count_active():
+            presented = request.headers.get("x-api-key") or ""
+            key = key_repo.find_active(presented)
+            if key is None:
+                _security_event("sdk_key_required", f"{method} {path}")
+                return JSONResponse(status_code=401, content={"detail": "a valid SDK key is required"})
+            key_repo.touch_last_used(key["id"])
+            request.state.actor = f"sdk:{key['id']} (label {key['label'] or 'unnamed'})"
+        return await call_next(request)
+
 
     def record_revision(name: str, definition: dict[str, Any], run_id: str | None) -> None:
         try:
@@ -500,6 +646,8 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         }
 
     # --- security ---------------------------------------------------------
+    scenario_lock = threading.Lock()
+
     @app.get("/api/security/status")
     async def security_status():
         try:
@@ -514,12 +662,46 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         provenance["key_pinned_in_settings"] = bool(settings.pinned_schema_public_key)
         provenance["fingerprint"] = provenance.get("key_fingerprint") or (
             fingerprint(key) if key else "")
+        active_keys = key_repo.count_active()
         return {
             "chain": {"ok": ok, "checked": checked, "first_broken_id": broken_id},
             "provenance": provenance,
             "signing_enabled": settings.schema_signing_enabled,
             "persistence_error": app.state.db_error,
+            "auth": {
+                "roles": ["operator", "sdk"],
+                "sdk_mode": "key_required" if active_keys else "open_no_keys",
+                "active_sdk_keys": active_keys,
+            },
+            "limits": policy.summary(),
+            "throttle_hits": throttle.hits(),
+            "breakers": breakers.status(),
+            "hosts": list(policy.allowed_hosts),
         }
+
+    @app.post("/api/security/keys")
+    async def security_create_key(payload: SdkKeyCreateRequest):
+        """Create an SDK key. The plaintext appears exactly once, here."""
+        created = key_repo.create(label=payload.label)
+        _security_event("sdk_key_created", f"sdk key #{created['id']} created (label {payload.label!r})")
+        return {
+            "key": created["key"],  # shown once; never stored or returned again
+            "id": created["id"],
+            "label": created["label"],
+            "created_at": created["created_at"],
+        }
+
+    @app.get("/api/security/keys")
+    async def security_list_keys():
+        """Metadata only: ids, labels, last usage. Never key material."""
+        return {"keys": key_repo.list_active(), "active": key_repo.count_active()}
+
+    @app.post("/api/security/keys/{key_id}/revoke")
+    async def security_revoke_key(key_id: int):
+        if not key_repo.revoke(key_id):
+            raise HTTPException(status_code=404, detail="key not found (or already revoked)")
+        _security_event("sdk_key_revoked", f"sdk key #{key_id} revoked")
+        return {"revoked": key_id}
 
     @app.post("/api/security/tamper")
     async def security_tamper(payload: dict | None = None):
@@ -529,15 +711,18 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         page exercise one implementation, including the schema drift that forces
         a fetch in the first place.
         """
+        if scenario_lock.locked():
+            raise HTTPException(status_code=409, detail="a scenario is already running")
         if not settings.schema_signing_enabled:
             raise HTTPException(
                 status_code=409,
                 detail="schema signing is disabled; the tamper demo cannot show a refusal",
             )
-        try:
-            result = run_scenario(new_harness(), "tampered_schema")
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"tamper demo failed: {exc}")
+        with scenario_lock:
+            try:
+                result = run_scenario(new_harness(), "tampered_schema")
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"tamper demo failed: {exc}")
         return {
             "tamper": {"tampered": result.get("outcome") == "refused"},
             "heal_attempt": {"outcome": result.get("outcome"),
@@ -619,6 +804,58 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
 
+    @app.post("/api/registry/rollback")
+    async def registry_rollback(payload: RollbackRequest):
+        """Operator-only rollback: CAS on ``current_revision`` (the revision the
+        operator last saw) and restore ``target_revision``'s definition. A stale
+        or unknown revision is refused with a clear error and no partial state.
+        Audited BEFORE the write (fail-closed)."""
+        current = revision_repo.latest(payload.tool)
+        if current is None:
+            raise HTTPException(status_code=404, detail=f"tool {payload.tool!r} has no recorded revisions")
+        target = revision_repo.definition_at(payload.tool, payload.target_revision)
+        if target is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"revision {payload.target_revision} does not exist for {payload.tool!r}",
+            )
+        if current["revision"] != payload.current_revision:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"registry moved on since you read it: current revision "
+                        f"{current['revision']}, you sent {payload.current_revision}; rollback rejected"),
+            )
+        try:
+            restored = dict(target)
+            restored["revision"] = current["revision"] + 1
+            # Audit-first: if this write fails, nothing changes (fail-closed).
+            audit.append(AuditEntry(
+                run_id="", tool=payload.tool, error={"summary": "operator rollback"},
+                classification="rollback", schema_version_before=current["revision"],
+                schema_version_after=current["revision"] + 1, schema_sha256="",
+                old_definition=current["definition"], new_definition=restored,
+                evidence=[f"operator rollback to revision {payload.target_revision}; audited before the write"],
+                confidence=0.0, outcome="applied", reason_code="rollback",
+                healing_path="security",
+            ))
+            new_revision = revision_repo.insert_cas(
+                payload.tool, payload.current_revision, restored, reason="operator-rollback")
+        except StaleRevisionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"registry moved on; rollback rejected: {exc}",
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"audit write failed; rollback not applied: {exc}",
+            )
+        return {
+            "tool": payload.tool,
+            "rolled_back_to": payload.target_revision,
+            "new_revision": new_revision,
+        }
+
     # --- public SDK adapter ---------------------------------------------
     @app.get("/api/sdk/tools")
     async def sdk_tools():
@@ -649,12 +886,72 @@ def create_app(settings: Settings | None = None, mock_client: httpx.Client | Non
             "healing_path": result.healing_path,
         }
 
+    # --- public dry-run (pasted specs; strictly offline) ------------------
+    DRYRUN_ERROR_STATUS = {
+        "invalid_spec": 400,
+        "unsupported_external_ref": 400,
+        "payload_too_large": 413,
+        "payload_too_deep": 413,
+        "unknown_operation": 422,
+    }
+
+    def _dryrun_http(exc: Exception) -> HTTPException:
+        if isinstance(exc, DryRunError):
+            return HTTPException(
+                status_code=DRYRUN_ERROR_STATUS.get(exc.code, 400),
+                detail={"message": exc.detail, "code": exc.code},
+            )
+        return HTTPException(status_code=400, detail={"message": str(exc), "code": "invalid_spec"})
+
+    @app.post("/api/dryrun/parse")
+    async def dryrun_parse(payload: DryRunParseRequest):
+        """List the real operations in the two pasted documents (auto-fill)."""
+        from ..dryrun import engine as dryrun_engine
+
+        try:
+            old_ops = dryrun_engine.list_operations(dryrun_engine.parse_spec_text(payload.old_spec, "old_spec"))
+            new_ops = dryrun_engine.list_operations(dryrun_engine.parse_spec_text(payload.new_spec, "new_spec"))
+        except Exception as exc:
+            raise _dryrun_http(exc)
+        return {
+            "kind": "dryrun",
+            "old_operations": old_ops,
+            "new_operations": new_ops,
+            "shared_operations": [
+                old for old in old_ops
+                for new in new_ops
+                if old["path"] == new["path"] and old["method"] == new["method"]
+            ],
+        }
+
+    @app.post("/api/dryrun/analyze")
+    async def dryrun_analyze(payload: DryRunAnalyzeRequest):
+        """What WOULD Reflex do here? Pure pipeline, zero persistence, zero calls."""
+        from ..dryrun import engine as dryrun_engine
+
+        proposer = repair_proposer  # gate lives inside the healer logic
+        try:
+            result = dryrun_engine.analyze(
+                old_spec_text=payload.old_spec,
+                new_spec_text=payload.new_spec,
+                operation=payload.operation,
+                original_request=payload.original_request,
+                error=payload.error,
+                proposer=proposer,
+            )
+        except Exception as exc:
+            raise _dryrun_http(exc)
+        return result
+
     @app.post("/api/scenarios/{scenario_id}/run")
     async def run_scenario_route(scenario_id: str):
-        try:
-            return run_scenario(new_harness(), scenario_id)
-        except KeyError:
-            raise HTTPException(status_code=404, detail=f"unknown scenario: {scenario_id}")
+        if scenario_lock.locked():
+            raise HTTPException(status_code=409, detail="a scenario is already running")
+        with scenario_lock:
+            try:
+                return run_scenario(new_harness(), scenario_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail=f"unknown scenario: {scenario_id}")
 
     return app
 
